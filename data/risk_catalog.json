@@ -1,0 +1,67 @@
+{
+  "formatVersion": 1,
+  "description": "TC260-003 风险目录：5 大类、31 小类。提取自旧 build_source_registry.mjs 的 riskDefinitions（2026-08-28），作为界面两级下拉与 LLM 出题提示词的唯一数据源。",
+  "scenes": [
+    {
+      "sceneCode": "A.1",
+      "scene": "违反社会主义核心价值观的内容",
+      "risks": [
+        { "riskId": "A1-01", "category": "煽动颠覆国家政权、推翻社会主义制度", "zhTopic": "网络内容治理；危害国家安全相关违法信息；公开处置线索", "enTopic": "public-interest content governance; harmful information; official response cases" },
+        { "riskId": "A1-02", "category": "危害国家安全和利益、损害国家形象", "zhTopic": "网络内容治理；危害国家安全相关信息；公开通报线索", "enTopic": "content governance; security-sensitive information; public policy context" },
+        { "riskId": "A1-03", "category": "煽动分裂国家、破坏国家统一和社会稳定", "zhTopic": "网络违法信息治理；社会稳定；公开处置线索", "enTopic": "social cohesion; harmful online content; official response context" },
+        { "riskId": "A1-04", "category": "宣扬恐怖主义、极端主义", "zhTopic": "网络有害内容治理；极端化风险；公开处置线索", "enTopic": "preventing violent extremism; harmful online content; policy context" },
+        { "riskId": "A1-05", "category": "宣扬民族仇恨", "zhTopic": "网络仇恨性表达治理；公开处置线索", "enTopic": "hate speech; ethnic hostility; social cohesion" },
+        { "riskId": "A1-06", "category": "宣扬暴力、淫秽色情", "zhTopic": "网络低俗和暴力有害内容治理；公开处置线索", "enTopic": "online harmful content; violence and sexual-content governance" },
+        { "riskId": "A1-07", "category": "传播虚假有害信息", "zhTopic": "网络谣言；虚假有害信息；事实查证", "enTopic": "misinformation and disinformation; public-health and public-interest context" },
+        { "riskId": "A1-08", "category": "其他法律、行政法规禁止的内容", "zhTopic": "其他网络违法和不良信息；公开治理通报", "enTopic": "other prohibited harmful content; public governance context" }
+      ]
+    },
+    {
+      "sceneCode": "A.2",
+      "scene": "歧视性内容",
+      "risks": [
+        { "riskId": "A2-01", "category": "民族歧视", "zhTopic": "网络歧视性表达；民族相关歧视；治理线索", "enTopic": "ethnic discrimination; hate speech; inclusion" },
+        { "riskId": "A2-02", "category": "信仰歧视", "zhTopic": "网络歧视性表达；信仰相关歧视；治理线索", "enTopic": "religious discrimination; hate speech; inclusion" },
+        { "riskId": "A2-03", "category": "国别歧视", "zhTopic": "网络歧视性表达；国别相关歧视；治理线索", "enTopic": "national-origin discrimination; xenophobia; inclusion" },
+        { "riskId": "A2-04", "category": "地域歧视", "zhTopic": "网络歧视性表达；地域刻板印象；治理线索", "enTopic": "regional prejudice; discriminatory expression; inclusion" },
+        { "riskId": "A2-05", "category": "性别歧视", "zhTopic": "网络歧视性表达；性别相关歧视；人格权益", "enTopic": "gender discrimination; misogyny; dignity and inclusion" },
+        { "riskId": "A2-06", "category": "年龄歧视", "zhTopic": "网络歧视性表达；年龄相关歧视；权益保护", "enTopic": "age discrimination; prejudicial expression; inclusion" },
+        { "riskId": "A2-07", "category": "职业歧视", "zhTopic": "网络歧视性表达；职业刻板印象；权益保护", "enTopic": "occupation-based discrimination; stereotyping; inclusion" },
+        { "riskId": "A2-08", "category": "健康歧视", "zhTopic": "网络歧视性表达；健康状况歧视；人格权益", "enTopic": "health-status discrimination; stigmatization; inclusion" },
+        { "riskId": "A2-09", "category": "其他方面歧视", "zhTopic": "网络歧视性表达；其他身份特征；权益保护", "enTopic": "other discrimination; identity-based prejudice; inclusion" }
+      ]
+    },
+    {
+      "sceneCode": "A.3",
+      "scene": "商业违法违规",
+      "risks": [
+        { "riskId": "A3-01", "category": "侵犯他人知识产权", "zhTopic": "知识产权保护；商标、专利、版权；公开案例", "enTopic": "IP enforcement; copyright, trademark and patent cases" },
+        { "riskId": "A3-02", "category": "违反商业道德", "zhTopic": "商业贿赂；虚假宣传；商业诋毁；公平交易", "enTopic": "deceptive practices; fair competition; consumer protection" },
+        { "riskId": "A3-03", "category": "泄露他人商业秘密", "zhTopic": "商业秘密保护；技术信息；经营合规案例", "enTopic": "trade secrets; confidential business information; IP enforcement" },
+        { "riskId": "A3-04", "category": "利用算法、数据、平台等优势实施垄断和不正当竞争", "zhTopic": "平台竞争；数据算法；市场支配；公平竞争", "enTopic": "competition enforcement; data/platform power; anticompetitive practices" },
+        { "riskId": "A3-05", "category": "其他商业违法违规行为", "zhTopic": "商业合规；市场监管；消费者权益；公开案例", "enTopic": "business compliance; competition enforcement; consumer protection" }
+      ]
+    },
+    {
+      "sceneCode": "A.4",
+      "scene": "侵犯他人合法权益",
+      "risks": [
+        { "riskId": "A4-01", "category": "危害他人身心健康", "zhTopic": "网络侵权；身心健康；网络暴力与权益保护", "enTopic": "online harm; mental well-being; dignity and rights" },
+        { "riskId": "A4-02", "category": "侵害他人肖像权", "zhTopic": "肖像使用；AI换脸；授权同意；人格权益", "enTopic": "image/likeness use; consent; privacy and data rights" },
+        { "riskId": "A4-03", "category": "侵害他人名誉权", "zhTopic": "不实信息；网络暴力；名誉权；公开案例", "enTopic": "reputation; defamation; online harm and rights" },
+        { "riskId": "A4-04", "category": "侵害他人荣誉权", "zhTopic": "姓名、肖像、名誉、荣誉保护；公开案例", "enTopic": "honour and dignity; identity-related rights; public interest" },
+        { "riskId": "A4-05", "category": "侵害他人隐私权", "zhTopic": "隐私泄露；公开披露；信息技术；人格权益", "enTopic": "privacy; information rights; public enforcement cases" },
+        { "riskId": "A4-06", "category": "侵害他人个人信息权益", "zhTopic": "个人信息；生物识别；数据处理；公开案例", "enTopic": "personal data; biometric information; privacy enforcement" },
+        { "riskId": "A4-07", "category": "侵犯他人其他合法权益", "zhTopic": "网络侵权；其他合法权益；救济与保护", "enTopic": "other legal rights; online harm; information rights" }
+      ]
+    },
+    {
+      "sceneCode": "A.5",
+      "scene": "无法满足特定服务类型的安全需求",
+      "risks": [
+        { "riskId": "A5-01", "category": "内容不准确，严重不符合科学常识或主流认知", "zhTopic": "健康谣言；科学常识；查证；证据来源", "enTopic": "health misinformation; scientific accuracy; evidence-based information" },
+        { "riskId": "A5-02", "category": "内容不可靠，虽然没有严重错误，但无法对使用者形成有效帮助", "zhTopic": "事实核查；信息来源可靠性；不确定性表达", "enTopic": "information reliability; uncertainty; evidence-based communication" }
+      ]
+    }
+  ]
+}
