@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+
+# Node
+node_modules/
+
+# 会话/工具记忆
+.workbuddy/
+
+# 测试临时目录
+tests/.tmp_*/
+
+# 运行产物不入库；仅保留登记表、素材表与采集配置
+data/*
+!data/source_registry.xlsx
+!data/source_items.xlsx
+!data/source_selection.json
+!data/corpus/
+data/corpus/*
+!data/corpus/html_sources.json
+!data/corpus/negative_sources.json
+!data/corpus/risk_classifier.json
+
+# 本地参考资料（第三方标准全文，不入公开仓库）
+docs/reference/
