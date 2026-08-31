@@ -81,6 +81,9 @@ class DesktopApplication(tk.Tk):
         self.settings_tab = ttk.Frame(notebook, padding=12)
         for name, tab in zip(WORKSPACES, [self.generate_tab, self.sources_tab, self.settings_tab], strict=True):
             notebook.add(tab, text=name)
+        for index in range(len(WORKSPACES)):
+            self.bind(f"<Control-Key-{index + 1}>",
+                      lambda event, page=index: notebook.select(page))
         self._build_generate_tab()
         self._build_sources_tab()
         self._build_settings_tab()
