@@ -1,0 +1,2 @@
+scrapling[fetchers]==0.4.15
+openpyxl>=3.1

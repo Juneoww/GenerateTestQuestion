@@ -1,6 +1,7 @@
 # Python
 __pycache__/
 *.pyc
+.venv/
 
 # 本地运行数据：留痕产物、归档、密钥（不入公开仓库）
 data/_legacy/
