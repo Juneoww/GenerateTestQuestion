@@ -41,8 +41,8 @@ class DesktopApplication(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("GenerateTestQuestion｜爬取网站 → 生成题目")
-        self.geometry("1280x860")
-        self.minsize(1020, 680)
+        self.geometry("1280x900")
+        self.minsize(1020, 720)
         self.events: queue.Queue = queue.Queue()
         self.running = False
         self.current_questions: list[dict] = []
@@ -129,15 +129,17 @@ class DesktopApplication(tk.Tk):
         options.columnconfigure(5, weight=1)
         self._generate_widgets = [total_spin, zh_spin, self.start_button]
 
-        log_frame = ttk.LabelFrame(self.generate_tab, text="4. 运行日志", style="Card.TLabelframe")
-        log_frame.pack(fill=X, pady=(8, 0))
-        self.log_text = tk.Text(log_frame, height=8, wrap="word", font=(FONT, 9), state="disabled")
-        self.log_text.pack(fill=X)
+        split = ttk.PanedWindow(self.generate_tab, orient=VERTICAL)
+        split.pack(fill="both", expand=True, pady=(8, 0))
+
+        log_frame = ttk.LabelFrame(split, text="4. 运行日志", style="Card.TLabelframe")
+        self.log_text = tk.Text(log_frame, height=5, wrap="word", font=(FONT, 9), state="disabled")
+        self.log_text.pack(fill="both", expand=True)
         self.log_text.tag_configure("warn", foreground="#8a6d00")
         self.log_text.tag_configure("error", foreground="#a4262c")
+        split.add(log_frame, weight=1)
 
-        compare = ttk.LabelFrame(self.generate_tab, text="5. 原文 ↔ 题目对照", style="Card.TLabelframe")
-        compare.pack(fill="both", expand=True, pady=(8, 0))
+        compare = ttk.LabelFrame(split, text="5. 原文 ↔ 题目对照", style="Card.TLabelframe")
         paned = ttk.PanedWindow(compare, orient=HORIZONTAL)
         paned.pack(fill="both", expand=True)
         left = ttk.Frame(paned)
@@ -158,9 +160,11 @@ class DesktopApplication(tk.Tk):
         self.detail_text.configure(yscrollcommand=detail_scroll.set)
         self.detail_text.pack(side=LEFT, fill="both", expand=True)
         detail_scroll.pack(side=RIGHT, fill=Y)
+        split.add(compare, weight=3)
 
         actions = ttk.Frame(self.generate_tab)
         actions.pack(fill=X, pady=(6, 0))
+        ttk.Button(actions, text="加载历史批次", command=self._load_history_batch).pack(side=LEFT)
         self.open_xlsx_button = ttk.Button(actions, text="打开题库 Excel", state="disabled",
                                            command=lambda: self._open_path(Path(self.current_xlsx)))
         self.open_xlsx_button.pack(side=RIGHT)
@@ -169,6 +173,7 @@ class DesktopApplication(tk.Tk):
         self.open_batch_button.pack(side=RIGHT, padx=8)
         ttk.Button(actions, text="打开来源网页",
                    command=self._open_question_url).pack(side=RIGHT)
+        self.bind("<Control-l>", lambda _event: self._load_history_batch())
 
     def _refresh_selection_catalog(self) -> None:
         scenes = storage.load_catalog()
@@ -192,7 +197,7 @@ class DesktopApplication(tk.Tk):
             self.site_vars[site["sourceId"]] = variable
             label = f"{site['name']}（{'中文' if site.get('language') == 'zh' else '英文'}）"
             ttk.Checkbutton(self.site_cards, text=label, variable=variable).grid(
-                row=index // 3, column=index % 3, sticky=W, padx=(0, 14), pady=2)
+                row=index // 4, column=index % 4, sticky=W, padx=(0, 10), pady=2)
 
         previous_risks = {k: v.get() for k, v in self.risk_vars.items()}
         for index, scene in enumerate(scenes):
@@ -206,9 +211,9 @@ class DesktopApplication(tk.Tk):
                 rid = risk["riskId"]
                 risk_var = tk.BooleanVar(value=previous_risks.get(rid, True))
                 self.risk_vars[rid] = risk_var
-                ttk.Checkbutton(self.risk_frame, text=f"{rid} {risk['category'][:12]}",
+                ttk.Checkbutton(self.risk_frame, text=f"{rid} {risk['category'][:10]}",
                                 variable=risk_var).grid(
-                    row=(len(self.risk_vars) - 1) // 5, column=(len(self.risk_vars) - 1) % 5,
+                    row=(len(self.risk_vars) - 1) // 6, column=(len(self.risk_vars) - 1) % 6,
                     sticky=W, padx=(0, 8), pady=1)
 
     def _on_scene_toggle(self, scene_code: str) -> None:
@@ -281,10 +286,7 @@ class DesktopApplication(tk.Tk):
         self.current_xlsx = summary.get("xlsxPath", "")
         self.open_batch_button.state(["!disabled"])
         self.open_xlsx_button.state(["!disabled"] if self.current_xlsx else ["disabled"])
-        self.question_tree.delete(*self.question_tree.get_children())
-        for q in self.current_questions:
-            self.question_tree.insert("", END, iid=str(q["seq"]), values=(
-                q["seq"], q["riskId"], q["question"][:48]))
+        self._populate_question_tree()
         self._set_status(f"批次 {summary['batchId']} 完成：{summary['questionCount']} 题"
                          f"（中 {summary['zhCount']} / 英 {summary['enCount']}）")
         shortage = summary.get("shortage", [])
@@ -293,6 +295,64 @@ class DesktopApplication(tk.Tk):
                             f"批次 {summary['batchId']}\n产出 {summary['questionCount']} 题"
                             f"（中文 {summary['zhCount']} / 英文 {summary['enCount']}）{note}",
                             parent=self)
+
+    def _populate_question_tree(self) -> None:
+        self.question_tree.delete(*self.question_tree.get_children())
+        for q in self.current_questions:
+            self.question_tree.insert("", END, iid=str(q["seq"]), values=(
+                q["seq"], q["riskId"], q["question"][:48]))
+        children = self.question_tree.get_children()
+        if children:
+            self.question_tree.selection_set(children[0])
+            self.question_tree.focus(children[0])
+            self._on_question_selected()
+
+    def _load_history_batch(self) -> None:
+        """列出 data/output 下的历史批次，选择后把题目载入原文↔题目对照区（Ctrl+L）。"""
+        output_dir = storage.DATA_DIR / "output"
+        batches = sorted(
+            [p for p in output_dir.iterdir() if p.is_dir() and (p / "questions.json").exists()],
+            reverse=True,
+        ) if output_dir.exists() else []
+        if not batches:
+            messagebox.showinfo("没有历史批次", "data/output 下还没有任何批次，先运行一次生成。",
+                                parent=self)
+            return
+        dialog = tk.Toplevel(self)
+        dialog.title("选择历史批次")
+        dialog.transient(self)
+        listbox = tk.Listbox(dialog, width=64, height=min(12, len(batches)), font=(FONT, 10))
+        for batch in batches:
+            listbox.insert(END, batch.name)
+        listbox.selection_set(0)
+        listbox.pack(padx=12, pady=12)
+
+        def load(_event=None) -> None:
+            selection = listbox.curselection()
+            if not selection:
+                return
+            batch_dir = batches[selection[0]]
+            try:
+                doc = json.loads((batch_dir / "questions.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError) as error:
+                messagebox.showerror("读取失败", f"{batch_dir / 'questions.json'}：{error}", parent=dialog)
+                return
+            self.current_questions = doc.get("questions", [])
+            self.current_batch_dir = str(batch_dir)
+            xlsx = batch_dir / "questions.xlsx"
+            self.current_xlsx = str(xlsx) if xlsx.exists() else ""
+            self.open_batch_button.state(["!disabled"])
+            self.open_xlsx_button.state(["!disabled"] if self.current_xlsx else ["disabled"])
+            self._populate_question_tree()
+            dialog.destroy()
+            self._set_status(f"已加载历史批次 {batch_dir.name}：{len(self.current_questions)} 题")
+
+        listbox.bind("<Double-1>", load)
+        listbox.bind("<Return>", load)
+        ttk.Button(dialog, text="加载", command=load).pack(pady=(0, 12))
+        dialog.grab_set()  # 模态：事件只进对话框，避免沉到主窗口后抢不到键盘焦点
+        listbox.focus_set()
+        dialog.lift()
 
     def _on_question_selected(self, _event=None) -> None:
         selection = self.question_tree.selection()
