@@ -8,7 +8,8 @@
 
 ## 当前阶段
 
-全部核心阶段完成；待办：P1 来源扩充、P7 README 更新与首次真机验收。
+P1–P6 全部完成。剩余（用户侧）：填入模型 API Key 做首次真实出题联调、界面可视化人工验收；
+（工程侧小尾巴）：`corpus/_archive` 待占用释放后归档、仓库 README 已更新待推送确认。
 
 ## 环境
 
@@ -20,9 +21,13 @@
 
 ### P1 来源侦察
 
-- [ ] 调研更多辟谣/监管/司法/事实核查类站点，走核验接口自动探测
-- [ ] 扩充 `data/sources.json`，刷新 `data/reports/网站名单.md`、`核验日志.md`
-- 种子：9 个旧实测 HTML 源已入清单（2026-08-28），其中 12377/辟谣平台已于 08-31 用新爬虫实测核验通过
+- [x] 候选站点探查（HTML 链接结构分析）与批量自动核验：**7/7 通过**（2026-08-31）
+- [x] `data/sources.json` 扩充至 16 源：中文新增网信办 CAC-ZH、国家版权局 NCAC-ZH、中消协 CCA-ZH；
+      英文新增 PolitiFact、FactCheck.org、AFP、Truth or Fiction
+- [x] `data/reports/网站名单.md`、`核验日志.md` 已生成（本地留痕，不入库）
+- 本轮失败候选（仅记日志）：市监总局、证监会（列表页 JS 壳）、Lead Stories（403 反爬，
+  后续可配 stealthy 引擎重试）
+- **状态：** completed 2026-08-31
 
 ### P2 风险目录提取
 
@@ -60,7 +65,8 @@
 
 - [x] 旧 Node 服务/测试删除、旧数据归档 `data/_legacy/`（`corpus/_archive` 待占用释放后移动）
 - [x] 全量回归：`python -m unittest discover -s tests` 35/35 通过
-- [ ] README 更新（纯 Python 部署说明、uv 环境创建步骤）
+- [x] 旧 `app.py` 已被三页新版重写（不再引用 tools/）
+- [x] README 更新（纯 Python 部署说明、uv 环境创建步骤）
 - [ ] 首次带真实 API Key 的端到端出题验收
 
 ## 测试
