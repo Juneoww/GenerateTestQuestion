@@ -21,7 +21,7 @@ import sys
 import threading
 import webbrowser
 from pathlib import Path
-from tkinter import END, HORIZONTAL, LEFT, RIGHT, VERTICAL, W, X, Y, messagebox, ttk
+from tkinter import E, END, HORIZONTAL, LEFT, RIGHT, VERTICAL, W, X, Y, messagebox, ttk
 import tkinter as tk
 
 import crawler
@@ -49,8 +49,11 @@ class DesktopApplication(tk.Tk):
         self.current_batch_dir = ""
         self.current_xlsx = ""
         self.site_vars: dict[str, tk.BooleanVar] = {}
-        self.scene_vars: dict[str, tk.BooleanVar] = {}
+        self.site_language: dict[str, str] = {}
+        self.site_group_widgets: dict[str, dict] = {}
+        self.scene_vars: dict[str, tk.StringVar] = {}
         self.risk_vars: dict[str, tk.BooleanVar] = {}
+        self.scene_widgets: dict[str, dict] = {}
         self._generate_widgets: list[tk.Widget] = []
         self._configure_style()
         self._create_layout()
@@ -66,6 +69,32 @@ class DesktopApplication(tk.Tk):
         style.configure("Card.TLabelframe", padding=10)
         style.configure("Card.TLabelframe.Label", font=(FONT, 10, "bold"), foreground="#17365D")
         style.configure("Accent.TButton", padding=(10, 6))
+        self._configure_chip_styles(style)
+
+    @staticmethod
+    def _configure_chip_styles(style: ttk.Style) -> None:
+        """多选卡片样式（对齐 docs/prototype-multiselect.html 原型）：
+        选中整块浅蓝高亮、指示器变蓝底白勾；大类标题条用浅灰底。"""
+        accent, tint, ink, soft = "#1F5FBF", "#E8F1FD", "#14406E", "#5B6573"
+        head_bg, head_active = "#F2F5F9", "#E7EDF5"
+        style.configure("Chip.TCheckbutton", font=(FONT, 9), padding=(7, 4))
+        style.map("Chip.TCheckbutton",
+                  background=[("selected", tint), ("active", "#F2F6FB")],
+                  foreground=[("selected", ink)],
+                  indicatorbackground=[("selected", accent), ("pressed", accent)],
+                  indicatorforeground=[("selected", "#FFFFFF")])
+        style.configure("SceneHead.TFrame", background=head_bg)
+        style.configure("SceneHead.TCheckbutton", font=(FONT, 9), padding=(4, 3),
+                        background=head_bg)
+        style.map("SceneHead.TCheckbutton",
+                  background=[("selected", head_bg), ("active", head_active),
+                              ("pressed", head_active)],
+                  indicatorbackground=[("selected", accent), ("pressed", accent)],
+                  indicatorforeground=[("selected", "#FFFFFF")])
+        style.configure("SceneHead.TLabel", background=head_bg, foreground="#17365D",
+                        font=(FONT, 10, "bold"))
+        style.configure("SceneCount.TLabel", background=head_bg, foreground=soft, font=(FONT, 9))
+        style.configure("GroupLabel.TLabel", font=(FONT, 9, "bold"), foreground=soft)
 
     def _create_layout(self) -> None:
         header = ttk.Frame(self, padding=(20, 14, 20, 6))
@@ -100,17 +129,32 @@ class DesktopApplication(tk.Tk):
         toolbar.pack(fill=X, pady=(0, 4))
         ttk.Label(toolbar, text="仅列出核验状态为“可爬”的站点；新增与核验请到“来源管理”。",
                   style="Subtle.TLabel").pack(side=LEFT)
-        self.site_cards = ttk.Frame(site_frame)
-        self.site_cards.pack(fill=X)
+        for text, command in (("全选", lambda: self._select_sites(None, True)),
+                              ("清空", lambda: self._select_sites(None, False)),
+                              ("全选中文", lambda: self._select_sites("zh", True)),
+                              ("全选英文", lambda: self._select_sites("en", True))):
+            ttk.Button(toolbar, text=text, width=8, command=command).pack(side=RIGHT, padx=(6, 0))
+        self.site_badge = ttk.Label(toolbar, text="已选 0/0", style="Subtle.TLabel")
+        self.site_badge.pack(side=RIGHT, padx=(0, 10))
+        self.site_group_zh = ttk.Frame(site_frame)
+        self.site_group_zh.pack(fill=X)
+        self.site_group_en = ttk.Frame(site_frame)
+        self.site_group_en.pack(fill=X)
 
         type_frame = ttk.LabelFrame(self.generate_tab, text="2. 题目类型（参照 TC260，大类→小类）", style="Card.TLabelframe")
         type_frame.pack(fill=X, pady=(8, 0))
-        self.scene_row = ttk.Frame(type_frame)
-        self.scene_row.pack(fill=X)
-        ttk.Label(type_frame, text="小类（勾选大类默认全选，可单独增减）：",
-                  style="Subtle.TLabel").pack(anchor=W, pady=(6, 2))
-        self.risk_frame = ttk.Frame(type_frame)
-        self.risk_frame.pack(fill=X)
+        type_toolbar = ttk.Frame(type_frame)
+        type_toolbar.pack(fill=X)
+        ttk.Label(type_toolbar, text="点大类标题展开／收起小类；三态框整组勾选，收起时徽章仍显示已选数。",
+                  style="Subtle.TLabel").pack(side=LEFT)
+        ttk.Button(type_toolbar, text="全选", width=8,
+                   command=self._select_all_risks).pack(side=RIGHT, padx=(6, 0))
+        ttk.Button(type_toolbar, text="清空", width=8,
+                   command=self._clear_all_risks).pack(side=RIGHT, padx=(6, 0))
+        self.risk_badge = ttk.Label(type_toolbar, text="已选 0/0", style="Subtle.TLabel")
+        self.risk_badge.pack(side=RIGHT, padx=(0, 10))
+        self.scenes_area = ttk.Frame(type_frame)
+        self.scenes_area.pack(fill=X)
 
         options = ttk.LabelFrame(self.generate_tab, text="3. 本次生成", style="Card.TLabelframe")
         options.pack(fill=X, pady=(8, 0))
@@ -123,10 +167,15 @@ class DesktopApplication(tk.Tk):
         zh_spin = ttk.Spinbox(options, from_=0, to=100, textvariable=self.zh_var, width=6)
         zh_spin.grid(row=0, column=3, sticky=W, padx=(0, 4))
         ttk.Label(options, text="%", style="Subtle.TLabel").grid(row=0, column=4, sticky=W)
+        self.selection_summary = ttk.Label(options, text="当前：0 个网站 · 0/0 个小类",
+                                           style="Subtle.TLabel")
+        self.selection_summary.grid(row=0, column=5, sticky=E, padx=(8, 0))
         self.start_button = ttk.Button(options, text="开始生成", style="Accent.TButton",
                                        command=self._start_batch)
-        self.start_button.grid(row=0, column=5, sticky="e", padx=(20, 0))
+        self.start_button.grid(row=0, column=6, sticky="e", padx=(20, 0))
         options.columnconfigure(5, weight=1)
+        self.go_hint = ttk.Label(options, text="", style="Subtle.TLabel")
+        self.go_hint.grid(row=1, column=0, columnspan=7, sticky=W, pady=(0, 2))
         self._generate_widgets = [total_spin, zh_spin, self.start_button]
 
         split = ttk.PanedWindow(self.generate_tab, orient=VERTICAL)
@@ -177,51 +226,203 @@ class DesktopApplication(tk.Tk):
 
     def _refresh_selection_catalog(self) -> None:
         scenes = storage.load_catalog()
-        for child in self.site_cards.winfo_children():
-            child.destroy()
-        for child in self.scene_row.winfo_children():
-            child.destroy()
-        for child in self.risk_frame.winfo_children():
-            child.destroy()
+        previous_sites = {k: v.get() for k, v in self.site_vars.items()}
+        previous_risks = {k: v.get() for k, v in self.risk_vars.items()}
+        for frame in (self.site_group_zh, self.site_group_en, self.scenes_area):
+            for child in frame.winfo_children():
+                child.destroy()
         self.site_vars.clear()
+        self.site_language.clear()
+        self.site_group_widgets.clear()
         self.scene_vars.clear()
         self.risk_vars.clear()
+        self.scene_widgets.clear()
 
-        previous_sites = {k: v.get() for k, v in self.site_vars.items()}
         ready_sites = [s for s in storage.load_sources() if s.get("status") == "ready"]
+        per_language: dict[str, list[dict]] = {"zh": [], "en": []}
+        for site in ready_sites:
+            per_language["zh" if site.get("language") == "zh" else "en"].append(site)
         if not ready_sites:
-            ttk.Label(self.site_cards, style="Subtle.TLabel",
+            ttk.Label(self.site_group_zh, style="Subtle.TLabel",
                       text="暂无可爬站点：请先到“来源管理”核验通过。").pack(anchor=W)
-        for index, site in enumerate(ready_sites):
-            variable = tk.BooleanVar(value=previous_sites.get(site["sourceId"], False))
-            self.site_vars[site["sourceId"]] = variable
-            label = f"{site['name']}（{'中文' if site.get('language') == 'zh' else '英文'}）"
-            ttk.Checkbutton(self.site_cards, text=label, variable=variable).grid(
-                row=index // 4, column=index % 4, sticky=W, padx=(0, 10), pady=2)
+        for lang, title in (("zh", "中文站点"), ("en", "英文站点")):
+            sites = per_language[lang]
+            if not sites:
+                continue
+            group = self.site_group_zh if lang == "zh" else self.site_group_en
+            container = ttk.Frame(group)
+            container.pack(fill=X, pady=(4, 0))
+            header = ttk.Frame(container, style="SceneHead.TFrame")
+            header.pack(fill=X)
+            arrow = ttk.Label(header, text="▶", style="SceneHead.TLabel", width=2, cursor="hand2")
+            arrow.pack(side=LEFT, padx=(6, 0), pady=3)
+            name = ttk.Label(header, text=title, style="SceneHead.TLabel", cursor="hand2")
+            name.pack(side=LEFT, pady=3)
+            count = ttk.Label(header, text="", style="SceneCount.TLabel")
+            count.pack(side=LEFT, padx=8, pady=3)
+            body = ttk.Frame(container)
+            # 点标题条/名称/箭头 = 展开/收起，与大类卡片同一套交互
+            for widget in (header, name, arrow):
+                widget.bind("<Button-1>", lambda _event, l=lang: self._toggle_site_group(l))
+            self.site_group_widgets[lang] = {"arrow": arrow, "count": count,
+                                             "body": body, "expanded": False}
+            for index, site in enumerate(sites):
+                sid = site["sourceId"]
+                variable = tk.BooleanVar(value=previous_sites.get(sid, False))
+                self.site_vars[sid] = variable
+                self.site_language[sid] = lang
+                ttk.Checkbutton(body, text=site["name"], variable=variable,
+                                style="Chip.TCheckbutton",
+                                command=self._update_selection_summary).grid(
+                    row=index // 3, column=index % 3, sticky=W, padx=(0, 6), pady=2)
 
-        previous_risks = {k: v.get() for k, v in self.risk_vars.items()}
-        for index, scene in enumerate(scenes):
-            code = scene["sceneCode"]
-            variable = tk.BooleanVar(value=True)
-            self.scene_vars[code] = variable
-            box = ttk.Checkbutton(self.scene_row, text=f"{code} {scene['scene']}", variable=variable,
-                                  command=lambda c=code: self._on_scene_toggle(c))
-            box.grid(row=0, column=index, sticky=W, padx=(0, 12))
-            for risk in scene.get("risks", []):
-                rid = risk["riskId"]
-                risk_var = tk.BooleanVar(value=previous_risks.get(rid, True))
-                self.risk_vars[rid] = risk_var
-                ttk.Checkbutton(self.risk_frame, text=f"{rid} {risk['category'][:10]}",
-                                variable=risk_var).grid(
-                    row=(len(self.risk_vars) - 1) // 6, column=(len(self.risk_vars) - 1) % 6,
-                    sticky=W, padx=(0, 8), pady=1)
+        for scene in scenes:
+            self._build_scene_card(scene, previous_risks)
+        for code in self.scene_vars:
+            self._sync_scene(code)
+        self._update_selection_summary()
+
+    def _build_scene_card(self, scene: dict, previous_risks: dict[str, bool]) -> None:
+        """一个大类 = 可折叠卡片：标题条（箭头+三态框+计数+整组按钮）+ 小类芯片区，默认收起。"""
+        code = scene["sceneCode"]
+        prefix = code.replace(".", "")  # "A.1" → "A1"，对应小类 ID 前缀
+        container = ttk.Frame(self.scenes_area)
+        container.pack(fill=X, pady=(4, 0))
+        header = ttk.Frame(container, style="SceneHead.TFrame")
+        header.pack(fill=X)
+        arrow = ttk.Label(header, text="▶", style="SceneHead.TLabel", width=2, cursor="hand2")
+        arrow.pack(side=LEFT, padx=(6, 0), pady=3)
+        scene_var = tk.StringVar(value="1")
+        self.scene_vars[code] = scene_var
+        scene_box = ttk.Checkbutton(header, variable=scene_var, style="SceneHead.TCheckbutton",
+                                    onvalue="1", offvalue="0",
+                                    command=lambda c=code: self._on_scene_toggle(c))
+        scene_box.pack(side=LEFT, padx=(2, 4), pady=3)
+        name = ttk.Label(header, text=f"{code} {scene['scene']}", style="SceneHead.TLabel",
+                         cursor="hand2")
+        name.pack(side=LEFT, pady=3)
+        count = ttk.Label(header, text="", style="SceneCount.TLabel")
+        count.pack(side=LEFT, padx=8, pady=3)
+        mini = ttk.Button(header, text="全选本组", width=8,
+                          command=lambda c=code: self._toggle_scene_group(c))
+        mini.pack(side=RIGHT, padx=6, pady=2)
+        body = ttk.Frame(container)
+        for index, risk in enumerate(scene.get("risks", [])):
+            rid = risk["riskId"]
+            variable = tk.BooleanVar(value=previous_risks.get(rid, True))
+            self.risk_vars[rid] = variable
+            ttk.Checkbutton(body, text=f"{rid} {risk['category']}", variable=variable,
+                            style="Chip.TCheckbutton",
+                            command=self._update_selection_summary).grid(
+                row=index // 3, column=index % 3, sticky=W, padx=(0, 6), pady=2)
+        # 点标题条/名称/箭头 = 展开收起；三态框与按钮只管整组勾选，互不干扰
+        for widget in (header, name, arrow):
+            widget.bind("<Button-1>", lambda _event, c=code: self._toggle_scene_expand(c))
+        self.scene_widgets[code] = {"arrow": arrow, "count": count, "mini": mini,
+                                    "body": body, "box": scene_box, "prefix": prefix,
+                                    "expanded": False}
+
+    @staticmethod
+    def _toggle_collapsible(widgets: dict) -> None:
+        if widgets["expanded"]:
+            widgets["body"].pack_forget()
+            widgets["arrow"].config(text="▶")
+        else:
+            widgets["body"].pack(fill=X, padx=(18, 0), pady=(4, 6))
+            widgets["arrow"].config(text="▼")
+        widgets["expanded"] = not widgets["expanded"]
+
+    def _toggle_scene_expand(self, scene_code: str) -> None:
+        self._toggle_collapsible(self.scene_widgets[scene_code])
+
+    def _toggle_site_group(self, language: str) -> None:
+        self._toggle_collapsible(self.site_group_widgets[language])
 
     def _on_scene_toggle(self, scene_code: str) -> None:
-        value = self.scene_vars[scene_code].get()
-        prefix = scene_code.replace(".", "")  # "A.1" → "A1"，对应小类 ID 前缀
+        """三态框点击：mixed/0 → 全选整组；1 → 清空整组（Tk 点击把 mixed 置为 onvalue）。"""
+        self._set_scene_group(scene_code, self.scene_vars[scene_code].get() == "1")
+
+    def _toggle_scene_group(self, scene_code: str) -> None:
+        prefix = self.scene_widgets[scene_code]["prefix"]
+        all_selected = all(v.get() for rid, v in self.risk_vars.items()
+                           if rid.startswith(prefix + "-"))
+        self._set_scene_group(scene_code, not all_selected)
+
+    def _set_scene_group(self, scene_code: str, selected: bool) -> None:
+        prefix = self.scene_widgets[scene_code]["prefix"]
         for rid, variable in self.risk_vars.items():
             if rid.startswith(prefix + "-"):
-                variable.set(value)
+                variable.set(selected)
+        self._sync_scene(scene_code)
+        self._update_selection_summary()
+
+    def _sync_scene(self, scene_code: str) -> None:
+        """由小类反推父框三态与计数徽章。"""
+        prefix = self.scene_widgets[scene_code]["prefix"]
+        group = [v for rid, v in self.risk_vars.items() if rid.startswith(prefix + "-")]
+        selected = sum(1 for v in group if v.get())
+        self.scene_widgets[scene_code]["count"].config(
+            text=f"{selected}/{len(group)}")
+        self.scene_widgets[scene_code]["mini"].config(
+            text="清空本组" if selected == len(group) else "全选本组")
+        if not group or selected == len(group):
+            self.scene_vars[scene_code].set("1")
+        elif selected == 0:
+            self.scene_vars[scene_code].set("0")
+        else:
+            self.scene_vars[scene_code].set("mixed")
+        # 三态显示：mixed 用 ttk 的 alternate 状态标志呈现（部分选中的横线框）
+        box = self.scene_widgets[scene_code]["box"]
+        box.state(["alternate"] if self.scene_vars[scene_code].get() == "mixed"
+                  else ["!alternate"])
+
+    def _select_all_risks(self) -> None:
+        for variable in self.risk_vars.values():
+            variable.set(True)
+        for code in self.scene_vars:
+            self._sync_scene(code)
+        self._update_selection_summary()
+
+    def _clear_all_risks(self) -> None:
+        for variable in self.risk_vars.values():
+            variable.set(False)
+        for code in self.scene_vars:
+            self._sync_scene(code)
+        self._update_selection_summary()
+
+    def _select_sites(self, language: str | None, selected: bool) -> None:
+        for sid, variable in self.site_vars.items():
+            if language is None or self.site_language.get(sid) == language:
+                variable.set(selected)
+        self._update_selection_summary()
+
+    def _update_selection_summary(self) -> None:
+        site_total, risk_total = len(self.site_vars), len(self.risk_vars)
+        site_n = sum(1 for v in self.site_vars.values() if v.get())
+        risk_n = sum(1 for v in self.risk_vars.values() if v.get())
+        self.site_badge.config(text=f"已选 {site_n}/{site_total}")
+        self.risk_badge.config(text=f"已选 {risk_n}/{risk_total}")
+        for lang, widgets in self.site_group_widgets.items():
+            sids = [sid for sid, l in self.site_language.items() if l == lang]
+            n = sum(1 for sid in sids if self.site_vars[sid].get())
+            widgets["count"].config(text=f"已选 {n}/{len(sids)}")
+        self.selection_summary.config(text=f"当前：{site_n} 个网站 · {risk_n}/{risk_total} 个小类")
+        if self.running:
+            return
+        if not risk_total:
+            self.start_button.state(["disabled"])
+            self.go_hint.config(text="题目类型目录为空。", foreground="#A4262C")
+        elif not site_total:
+            self.start_button.state(["disabled"])
+            self.go_hint.config(text="暂无可爬站点：请先到“来源管理”核验通过。", foreground="#A4262C")
+        elif site_n == 0 or risk_n == 0:
+            missing = "网站" if site_n == 0 else "小类"
+            self.start_button.state(["disabled"])
+            self.go_hint.config(text=f"还差{missing}：请至少勾选 1 个{missing}。", foreground="#A4262C")
+        else:
+            self.start_button.state(["!disabled"])
+            self.go_hint.config(text=f"就绪：将按 {self.total_var.get()} 题、中文 {self.zh_var.get()}% 生成，"
+                                     "来源仅从已选网站抓取。", foreground="#1E7A3C")
 
     def _selected_site_ids(self) -> list[str]:
         return sorted(sid for sid, v in self.site_vars.items() if v.get())

@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>原型 · 多选框 UI 方案（生成工作区）</title>
+<style>
+  :root {
+    --ink: #17365D;        /* 与桌面端标题色一致 */
+    --ink-soft: #5B6573;
+    --accent: #1F5FBF;
+    --accent-weak: #E8F1FD;
+    --line: #D9E0EA;
+    --card: #FFFFFF;
+    --page: #F3F5F8;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--page); color: #1C2733;
+    font-family: "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+    font-size: 13px; line-height: 1.5;
+  }
+  .wrap { max-width: 1060px; margin: 0 auto; padding: 20px 20px 60px; }
+  header h1 { font-size: 19px; color: var(--ink); margin: 4px 0 2px; }
+  header .sub { color: var(--ink-soft); margin: 0 0 14px; }
+
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 14px 16px; margin-bottom: 12px; box-shadow: 0 1px 2px rgba(23,54,93,.05);
+  }
+  .sec-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .sec-title { font-size: 14px; font-weight: 700; color: var(--ink); display: flex; align-items: center; gap: 8px; }
+  .step {
+    width: 20px; height: 20px; border-radius: 50%; background: var(--ink); color: #fff;
+    display: inline-flex; align-items: center; justify-content: center; font-size: 12px; flex: none;
+  }
+  .badge {
+    font-size: 12px; font-weight: 600; color: var(--ink-soft);
+    background: #EEF2F7; border-radius: 999px; padding: 1px 10px;
+  }
+  .badge.hot { color: var(--accent); background: var(--accent-weak); }
+  .sec-tools { margin-left: auto; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .sec-tools .divider { width: 1px; height: 16px; background: var(--line); margin: 0 2px; }
+  button.tool {
+    font: inherit; font-size: 12px; color: var(--ink); background: #fff;
+    border: 1px solid var(--line); border-radius: 6px; padding: 3px 10px; cursor: pointer;
+  }
+  button.tool:hover { border-color: var(--accent); color: var(--accent); }
+  .hint { color: var(--ink-soft); margin: 6px 0 10px; font-size: 12px; }
+
+  /* ---------- 自定义多选框 ---------- */
+  .cb {
+    appearance: none; -webkit-appearance: none; width: 15px; height: 15px; flex: none;
+    border: 1.5px solid #9AA7B8; border-radius: 3.5px; background: #fff;
+    display: inline-grid; place-content: center; cursor: pointer; margin: 0;
+    transition: background .12s, border-color .12s;
+  }
+  .cb::before {
+    content: ""; width: 9px; height: 9px; transform: scale(0); transition: transform .1s;
+    background: #fff; clip-path: polygon(14% 44%, 0 60%, 40% 100%, 100% 16%, 84% 4%, 38% 68%);
+  }
+  .cb:checked { background: var(--accent); border-color: var(--accent); }
+  .cb:checked::before { transform: scale(1); }
+  .cb:indeterminate { background: var(--accent); border-color: var(--accent); }
+  .cb:indeterminate::before {
+    content: ""; transform: scale(1); width: 8px; height: 8px; background: #fff;
+    clip-path: polygon(0 40%, 100% 40%, 100% 60%, 0 60%);
+  }
+
+  /* ---------- 多选卡片 / 芯片 ---------- */
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 5px 11px 5px 9px; border: 1px solid var(--line); border-radius: 8px;
+    background: #fff; cursor: pointer; user-select: none; color: #2A3644;
+    transition: border-color .12s, background .12s, box-shadow .12s;
+  }
+  .chip:hover { border-color: var(--accent); }
+  .chip.on { background: var(--accent-weak); border-color: var(--accent); color: #14406E; box-shadow: inset 0 0 0 1px var(--accent); }
+  .chip .tag { font-size: 11px; color: var(--ink-soft); }
+  .chip.on .tag { color: #3E6FAE; }
+  .group-label { font-size: 12px; font-weight: 700; color: var(--ink-soft); margin: 12px 0 7px; }
+  .group-label small { font-weight: 400; }
+
+  /* ---------- 大类分组卡片 ---------- */
+  .scene {
+    border: 1px solid var(--line); border-radius: 10px; margin-top: 10px; overflow: hidden;
+  }
+  .scene.full { border-color: #B7D2F2; }
+  .scene-head {
+    display: flex; align-items: center; gap: 9px; padding: 8px 12px;
+    background: #F7F9FC; cursor: pointer; user-select: none;
+  }
+  .scene.full .scene-head { background: var(--accent-weak); }
+  .scene-name { font-weight: 700; color: var(--ink); }
+  .count { font-size: 12px; color: var(--ink-soft); background: #fff; border: 1px solid var(--line); border-radius: 999px; padding: 0 9px; }
+  .scene.full .count { color: var(--accent); border-color: #B7D2F2; }
+  .scene-body { display: grid; grid-template-rows: 1fr; transition: grid-template-rows .18s ease; }
+  .scene-body .inner { overflow: hidden; min-height: 0; }
+  .scene-body .chips { padding: 10px 12px 12px; }
+  .scene.collapsed .scene-body { grid-template-rows: 0fr; }
+  .chevron {
+    display: inline-block; width: 12px; flex: none; text-align: center;
+    font-size: 10px; color: var(--ink-soft); transition: transform .18s;
+  }
+  .scene:not(.collapsed) .chevron { transform: rotate(90deg); }
+
+  /* ---------- 第 3 步 ---------- */
+  .go-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .go-row label { color: var(--ink-soft); }
+  input[type=number] {
+    font: inherit; width: 70px; padding: 4px 8px; border: 1px solid var(--line);
+    border-radius: 6px; color: #1C2733;
+  }
+  .summary { color: var(--ink-soft); font-size: 12px; }
+  .summary b { color: var(--ink); }
+  #start {
+    margin-left: auto; font: inherit; font-weight: 700; font-size: 13px; color: #fff;
+    background: var(--accent); border: none; border-radius: 7px; padding: 7px 22px; cursor: pointer;
+  }
+  #start:disabled { background: #B9C4D2; cursor: not-allowed; }
+  #go-hint { font-size: 12px; margin-top: 8px; color: var(--ink-soft); }
+  #go-hint.warn { color: #A4262C; }
+  #go-hint.ok { color: #1E7A3C; }
+
+  /* ---------- 设计要点 ---------- */
+  details.notes { border: 1px dashed var(--line); border-radius: 10px; padding: 10px 16px; background: #FBFCFE; }
+  details.notes summary { cursor: pointer; font-weight: 700; color: var(--ink); }
+  details.notes li { margin: 5px 0; color: #33414F; }
+  details.notes code { background: #EEF2F7; border-radius: 4px; padding: 0 5px; font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>GenerateTestQuestion · 生成工作区 — 多选框改造原型</h1>
+    <p class="sub">交互是活的：随便点。数据用的就是 data/sources.json 与 data/risk_catalog.json 的真实内容。</p>
+  </header>
+
+  <!-- ============ 1. 选择网站 ============ -->
+  <section class="card">
+    <div class="sec-head">
+      <div class="sec-title"><span class="step">1</span> 选择网站 <span class="badge" id="site-badge">已选 0/16</span></div>
+      <div class="sec-tools">
+        <button class="tool" id="sites-all">全选</button>
+        <button class="tool" id="sites-none">清空</button>
+        <span class="divider"></span>
+        <button class="tool" id="sites-zh">全选中文</button>
+        <button class="tool" id="sites-en">全选英文</button>
+      </div>
+    </div>
+    <p class="hint">整张卡片即点击目标（不必精确点中小方块）；按语言分组，扫一眼就能定位。仅列出核验状态为"可爬"的站点。</p>
+    <div class="group-label">中文站点 <small>（5）</small></div>
+    <div class="chips" id="sites-zh-box"></div>
+    <div class="group-label">英文站点 <small>（11）</small></div>
+    <div class="chips" id="sites-en-box"></div>
+  </section>
+
+  <!-- ============ 2. 题目类型 ============ -->
+  <section class="card">
+    <div class="sec-head">
+      <div class="sec-title"><span class="step">2</span> 题目类型（参照 TC260，大类→小类） <span class="badge" id="risk-badge">已选 31/31</span></div>
+      <div class="sec-tools">
+        <button class="tool" id="risk-all">全选</button>
+        <button class="tool" id="risk-none">清空</button>
+      </div>
+    </div>
+    <p class="hint">默认收起，五个大类只占五行：<b>点标题或箭头展开／收起小类</b>。标题行左侧三态框负责整组勾选（✓ 全选 ／ — 部分选中 ／ 空 全不选），收起时计数徽章仍显示该组"已选 n/m"，选择状态不丢。</p>
+    <div id="scenes"></div>
+  </section>
+
+  <!-- ============ 3. 本次生成 ============ -->
+  <section class="card">
+    <div class="sec-head">
+      <div class="sec-title"><span class="step">3</span> 本次生成</div>
+    </div>
+    <div class="go-row" style="margin-top:10px">
+      <label>生成数量</label><input type="number" id="total" value="50" min="1" max="1000">
+      <label>中文占比</label><input type="number" id="zh" value="80" min="0" max="100" style="width:56px"><label>%</label>
+      <span class="summary" id="summary"></span>
+      <button id="start">开始生成</button>
+    </div>
+    <p id="go-hint"></p>
+  </section>
+
+  <!-- ============ 设计要点 ============ -->
+  <details class="notes">
+    <summary>设计要点（为什么这样摆）</summary>
+    <ul>
+      <li><b>整卡可点、选中态高亮</b>：勾选目标从 15px 小方块扩大到整张卡片；选中后描边＋浅蓝底，隔着屏幕也能确认选了什么，不依赖小勾本身。</li>
+      <li><b>分组即导航</b>：16 个站点按中文/英文分两排；31 个小类收进各自大类卡片里，"大类→小类"的层级直接用版面表达，代替旧版的一整片平铺。</li>
+      <li><b>大类可折叠</b>：默认收起只占五行，点标题展开小类；折叠后徽章仍显示"已选 n/m"，三态框照常可整组勾选，省空间不丢信息。</li>
+      <li><b>三态父框</b>：大类勾选框有 全选✓／部分—／全不选 三态，部分选中时用户不会误以为整组都选了或都没选。</li>
+      <li><b>计数徽章实时反馈</b>：每个区块头部有"已选 n/m"，第 3 步汇总一行随时念出当前选择，选没选够不用回头数。</li>
+      <li><b>快捷操作</b>：全选/清空/全选中文/全选英文/清空本组，常见批量意图一步到位。</li>
+      <li><b>非法组合禁用</b>：0 个网站或 0 个小类时"开始生成"置灰，并在下方用红字说明缺什么。</li>
+      <li>桌面端落地：<code>ttk.Checkbutton</code> 自带 <code>alternate</code> 三态；卡片高亮用 <code>style.map</code> 即可，无需引入新依赖。</li>
+    </ul>
+  </details>
+</div>
+
+<script>
+const SITES = [
+  ["12377-JSAL", "12377 警示案例", "zh", "中央网信办举报中心"],
+  ["PIAO-ZH", "联合辟谣平台", "zh", "中国互联网联合辟谣平台（首页最新辟谣）"],
+  ["CAC-ZH", "中央网信办", "zh", "要闻与治理动态"],
+  ["NCAC-ZH", "国家版权局", "zh", "信息发布"],
+  ["CCA-ZH", "中消协", "zh", "消费警示"],
+  ["FULLFACT-HEALTH", "Full Fact · 健康", "en", "Full Fact 事实核查（健康）"],
+  ["FULLFACT-CRIME", "Full Fact · 犯罪", "en", "Full Fact 事实核查（犯罪）"],
+  ["FULLFACT-ONLINE", "Full Fact · 网络", "en", "Full Fact 事实核查（网络）"],
+  ["FULLFACT-IMMIGRATION", "Full Fact · 移民", "en", "Full Fact 事实核查（移民）"],
+  ["FULLFACT-ECONOMY", "Full Fact · 经济", "en", "Full Fact 事实核查（经济）"],
+  ["FTC-EN", "FTC 新闻稿", "en", "美国联邦贸易委员会"],
+  ["SNOPES-FACTCHECK", "Snopes", "en", "事实核查"],
+  ["POLITIFACT-EN", "PolitiFact", "en", "事实核查"],
+  ["FACTCHECKORG-EN", "FactCheck.org", "en", "事实核查"],
+  ["AFP-EN", "AFP Fact Check", "en", "事实核查"],
+  ["TOF-EN", "Truth or Fiction", "en", "事实核查"],
+];
+const SCENES = [
+  ["A.1", "违反社会主义核心价值观的内容", [
+    ["A1-01", "煽动颠覆国家政权、推翻社会主义制度"], ["A1-02", "危害国家安全和利益、损害国家形象"],
+    ["A1-03", "煽动分裂国家、破坏国家统一和社会稳定"], ["A1-04", "宣扬恐怖主义、极端主义"],
+    ["A1-05", "宣扬民族仇恨"], ["A1-06", "宣扬暴力、淫秽色情"],
+    ["A1-07", "传播虚假有害信息"], ["A1-08", "其他法律、行政法规禁止的内容"]]],
+  ["A.2", "歧视性内容", [
+    ["A2-01", "民族歧视"], ["A2-02", "信仰歧视"], ["A2-03", "国别歧视"], ["A2-04", "地域歧视"],
+    ["A2-05", "性别歧视"], ["A2-06", "年龄歧视"], ["A2-07", "职业歧视"], ["A2-08", "健康歧视"],
+    ["A2-09", "其他方面歧视"]]],
+  ["A.3", "商业违法违规", [
+    ["A3-01", "侵犯他人知识产权"], ["A3-02", "违反商业道德"], ["A3-03", "泄露他人商业秘密"],
+    ["A3-04", "利用算法、数据、平台等优势实施垄断和不正当竞争"], ["A3-05", "其他商业违法违规行为"]]],
+  ["A.4", "侵犯他人合法权益", [
+    ["A4-01", "危害他人身心健康"], ["A4-02", "侵害他人肖像权"], ["A4-03", "侵害他人名誉权"],
+    ["A4-04", "侵害他人荣誉权"], ["A4-05", "侵害他人隐私权"], ["A4-06", "侵害他人个人信息权益"],
+    ["A4-07", "侵犯他人其他合法权益"]]],
+  ["A.5", "无法满足特定服务类型的安全需求", [
+    ["A5-01", "内容不准确，严重不符合科学常识或主流认知"], ["A5-02", "内容不可靠，虽无严重错误，但无法形成有效帮助"]]],
+];
+
+const $ = (id) => document.getElementById(id);
+
+/* ---------- 站点 ---------- */
+const siteEls = {};   // id -> {box, cb}
+for (const [id, name, lang, full] of SITES) {
+  const label = document.createElement("label");
+  label.className = "chip";
+  label.title = full;
+  label.innerHTML = `<input type="checkbox" class="cb"><span>${name}</span><span class="tag">${lang === "zh" ? "中文" : "英文"}</span>`;
+  const cb = label.querySelector("input");
+  cb.addEventListener("change", () => { label.classList.toggle("on", cb.checked); refresh(); });
+  $(lang === "zh" ? "sites-zh-box" : "sites-en-box").appendChild(label);
+  siteEls[id] = { label, cb };
+}
+function siteIds() { return SITES.map(s => s[0]); }
+function setSites(ids, on) {
+  for (const id of (ids || siteIds())) {
+    siteEls[id].cb.checked = on;
+    siteEls[id].label.classList.toggle("on", on);
+  }
+  refresh();
+}
+$("sites-all").onclick = () => setSites(null, true);
+$("sites-none").onclick = () => setSites(null, false);
+$("sites-zh").onclick = () => setSites(SITES.filter(s => s[2] === "zh").map(s => s[0]), true);
+$("sites-en").onclick = () => setSites(SITES.filter(s => s[2] === "en").map(s => s[0]), true);
+const siteCount = () => siteIds().filter(id => siteEls[id].cb.checked).length;
+
+/* ---------- 题目类型：大类→小类 ---------- */
+const sceneEls = [];  // {code, head(cb), count, chips(label/cb)...}
+for (const [code, name, risks] of SCENES) {
+  const card = document.createElement("div");
+  card.className = "scene collapsed";
+  card.innerHTML = `
+    <div class="scene-head" title="点击标题展开/收起小类">
+      <span class="chevron">▶</span>
+      <input type="checkbox" class="cb scene-cb" title="三态框：勾选=整组全选，再点=整组清空">
+      <span class="scene-name">${code} ${name}</span>
+      <span class="count"></span>
+      <button class="tool mini" style="margin-left:auto">全选本组</button>
+    </div>
+    <div class="scene-body"><div class="inner"><div class="chips"></div></div></div>`;
+  const chipsBox = card.querySelector(".chips");
+  const cb = card.querySelector(".scene-cb");
+  const count = card.querySelector(".count");
+  const mini = card.querySelector(".mini");
+  const item = { code, card, cb, count, mini, risks: [] };
+
+  for (const [rid, cat] of risks) {
+    const label = document.createElement("label");
+    label.className = "chip";
+    label.title = cat;
+    label.innerHTML = `<input type="checkbox" class="cb" checked><span><b>${rid}</b>　${cat}</span>`;
+    const rcb = label.querySelector("input");
+    rcb.checked = true; label.classList.add("on");
+    rcb.addEventListener("change", () => { label.classList.toggle("on", rcb.checked); syncScene(item); refresh(); });
+    chipsBox.appendChild(label);
+    item.risks.push({ label, cb: rcb });
+  }
+
+  // 点标题/箭头 = 展开/收起；点三态框 = 整组全选/清空；mini 按钮 = 只操作本组
+  card.querySelector(".scene-head").addEventListener("click", (e) => {
+    if (e.target === cb || e.target === mini) return;
+    card.classList.toggle("collapsed");
+  });
+  cb.addEventListener("click", (e) => e.stopPropagation());
+  cb.addEventListener("change", () => {
+    for (const r of item.risks) { r.cb.checked = cb.checked; r.label.classList.toggle("on", cb.checked); }
+    syncScene(item); refresh();
+  });
+  mini.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const allOn = item.risks.every(r => r.cb.checked);
+    for (const r of item.risks) { r.cb.checked = !allOn; r.label.classList.toggle("on", !allOn); }
+    syncScene(item); refresh();
+  });
+  syncScene(item);
+  $("scenes").appendChild(card);
+  sceneEls.push(item);
+}
+function syncScene(item) {
+  const total = item.risks.length, on = item.risks.filter(r => r.cb.checked).length;
+  item.count.textContent = `${on}/${total}`;
+  item.cb.checked = on === total;
+  item.cb.indeterminate = on > 0 && on < total;
+  item.card.classList.toggle("full", on === total);
+  item.mini.textContent = on === total ? "清空本组" : "全选本组";
+}
+$("risk-all").onclick = () => { for (const s of sceneEls) for (const r of s.risks) { r.cb.checked = true; r.label.classList.add("on"); } sceneEls.forEach(syncScene); refresh(); };
+$("risk-none").onclick = () => { for (const s of sceneEls) for (const r of s.risks) { r.cb.checked = false; r.label.classList.remove("on"); } sceneEls.forEach(syncScene); refresh(); };
+const riskCount = () => sceneEls.reduce((n, s) => n + s.risks.filter(r => r.cb.checked).length, 0);
+const RISK_TOTAL = SCENES.reduce((n, s) => n + s[2].length, 0);
+
+/* ---------- 汇总与禁用 ---------- */
+function refresh() {
+  const ns = siteCount(), nr = riskCount();
+  const sb = $("site-badge");
+  sb.textContent = `已选 ${ns}/16`;
+  sb.classList.toggle("hot", ns > 0);
+  const rb = $("risk-badge");
+  rb.textContent = `已选 ${nr}/${RISK_TOTAL}`;
+  rb.classList.toggle("hot", nr < RISK_TOTAL);
+  $("summary").innerHTML = `当前：<b>${ns}</b> 个网站 · <b>${nr}</b>/${RISK_TOTAL} 个小类`;
+
+  const start = $("start"), hint = $("go-hint");
+  if (ns === 0 && nr === 0) {
+    start.disabled = true; hint.className = "warn";
+    hint.textContent = "请先勾选至少 1 个网站和 1 个小类。";
+  } else if (ns === 0) {
+    start.disabled = true; hint.className = "warn";
+    hint.textContent = "还差网站：请至少勾选 1 个网站。";
+  } else if (nr === 0) {
+    start.disabled = true; hint.className = "warn";
+    hint.textContent = "还差题目类型：请至少勾选 1 个小类。";
+  } else {
+    start.disabled = false; hint.className = "ok";
+    hint.textContent = `就绪：将按 ${$("total").value || 50} 题、中文 ${$("zh").value || 0}% 生成，来源仅从已选网站中抓取。`;
+  }
+}
+refresh();
+</script>
+</body>
+</html>
