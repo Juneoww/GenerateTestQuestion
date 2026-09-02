@@ -30,7 +30,7 @@ import question_generator
 import reporting
 import storage
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = storage.PROJECT_ROOT  # 冻结为 exe 时即 exe 所在目录
 WORKSPACES = ("生成", "来源管理", "设置")
 FONT = "Microsoft YaHei UI"
 

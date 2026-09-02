@@ -48,6 +48,20 @@ run.bat
 每批次产物位于 `data/output/<批次>/`：题目 Excel/JSON、爬取内容 items.jsonl、模型调用记录、
 运行日志与批次汇总。
 
+## 免安装版（Windows exe）
+
+不想装 Python 也可以直接用打包好的单文件程序：到
+[Releases](https://github.com/Juneoww/GenerateTestQuestion/releases)
+下载 `GenerateTestQuestion.exe`（约 60 MB），放到任意**可写**目录（如桌面、D 盘某文件夹）双击运行。
+
+- 首次运行会在 exe 旁边生成 `data/` 目录（内置 16 个来源站点与 TC260 风险目录）。
+- 到「设置」页填入模型接口地址与 API Key，「测试连接」通过后保存即可开始生成。
+- 升级：下载新版 exe 覆盖旧文件即可，`data/`（已保存的设置与历史批次）不受影响。
+- 命令行自检：`GenerateTestQuestion.exe --smoke-test`，输出 JSON 即为正常。
+- SmartScreen 首次可能提示"未知发布者"，点「更多信息 → 仍要运行」。
+
+自行打包：配好虚拟环境后运行 `build_exe.bat`（PyInstaller 单文件模式），产物在 `dist/`。
+
 ## 运行要求
 
 - Windows + Python ≥3.10（经 uv 独立环境 `.venv`）。

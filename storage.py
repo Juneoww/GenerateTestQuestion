@@ -12,10 +12,27 @@
 from __future__ import annotations
 
 import json
+import shutil
+import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+
+def _app_root() -> Path:
+    """打包成 exe（PyInstaller 冻结）时以 exe 所在目录为根，data/ 与 exe 同级（便携式）。"""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+PROJECT_ROOT = _app_root()
 DATA_DIR = PROJECT_ROOT / "data"
+
+if getattr(sys, "frozen", False) and not DATA_DIR.exists():
+    # 首次运行：把随包内置的来源清单/风险目录释放到 exe 旁边。
+    # 刻意不含 settings.json——API Key 必须由使用者自己填写。
+    bundled = Path(getattr(sys, "_MEIPASS", "")) / "data"
+    if bundled.exists():
+        shutil.copytree(bundled, DATA_DIR)
 
 SOURCE_DEFAULTS = {
     "method": "html",

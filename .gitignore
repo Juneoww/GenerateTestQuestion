@@ -18,3 +18,8 @@ tests/.tmp_*/
 
 # 本地参考资料（第三方标准全文，不入公开仓库）
 docs/reference/
+
+# PyInstaller 打包产物
+dist/
+build/
+*.spec
