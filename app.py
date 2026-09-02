@@ -21,7 +21,7 @@ import sys
 import threading
 import webbrowser
 from pathlib import Path
-from tkinter import BOTTOM, E, END, HORIZONTAL, LEFT, NW, RIGHT, VERTICAL, W, X, Y, messagebox, ttk
+from tkinter import BOTTOM, E, END, HORIZONTAL, LEFT, NW, RIGHT, VERTICAL, W, X, Y, filedialog, messagebox, ttk
 import tkinter as tk
 
 import crawler
@@ -564,7 +564,7 @@ class DesktopApplication(tk.Tk):
 
     def _load_history_batch(self) -> None:
         """列出 data/output 下的历史批次，选择后把题目载入原文↔题目对照区（Ctrl+L）。"""
-        output_dir = storage.DATA_DIR / "output"
+        output_dir = pipeline.resolve_output_dir(storage.load_settings())
         batches = sorted(
             [p for p in output_dir.iterdir() if p.is_dir() and (p / "questions.json").exists()],
             reverse=True,
@@ -790,18 +790,25 @@ class DesktopApplication(tk.Tk):
             "temperature": tk.StringVar(), "timeoutSeconds": tk.StringVar(),
             "retries": tk.StringVar(), "maxQuestionsPerItem": tk.StringVar(),
             "crawlDelayMs": tk.StringVar(), "requestTimeoutSeconds": tk.StringVar(),
+            "outputDir": tk.StringVar(),
         }
         labels = {
             "baseUrl": "接口地址（含 /v1 等版本号）", "apiKey": "API Key", "model": "模型名",
             "temperature": "温度", "timeoutSeconds": "接口超时（秒）", "retries": "出题重试次数",
             "maxQuestionsPerItem": "单条原文最多出题数", "crawlDelayMs": "爬取请求间隔（毫秒）",
-            "requestTimeoutSeconds": "爬取超时（秒）",
+            "requestTimeoutSeconds": "爬取超时（秒）", "outputDir": "产物存放路径",
         }
         for row, (key, label) in enumerate(labels.items()):
             ttk.Label(frame, text=label).grid(row=row, column=0, sticky=W, padx=8, pady=5)
             entry = ttk.Entry(frame, textvariable=self.setting_vars[key], width=52,
                               show="*" if key == "apiKey" else "")
             entry.grid(row=row, column=1, sticky=W, pady=5)
+        output_row = list(labels).index("outputDir")
+        ttk.Button(frame, text="浏览…", command=self._pick_output_dir).grid(
+            row=output_row, column=2, sticky=W, padx=(6, 0))
+        ttk.Label(frame, text="生成产物（题目 Excel/JSON、原文、留痕）存放在该目录下的 BATCH-… 批次子目录；"
+                              "留空则使用程序目录 data\\output。", style="Subtle.TLabel").grid(
+            row=len(labels), column=0, columnspan=3, sticky=W, padx=8, pady=(0, 6))
         buttons = ttk.Frame(self.settings_tab)
         buttons.pack(fill=X, pady=(10, 0))
         ttk.Button(buttons, text="保存设置", command=self._save_settings).pack(side=LEFT)
@@ -814,6 +821,13 @@ class DesktopApplication(tk.Tk):
         settings = storage.load_settings()
         for key, variable in self.setting_vars.items():
             variable.set(str(settings.get(key, "")))
+
+    def _pick_output_dir(self) -> None:
+        current = self.setting_vars["outputDir"].get().strip()
+        initial = current if current and Path(current).exists() else str(PROJECT_ROOT)
+        chosen = filedialog.askdirectory(parent=self, title="选择产物存放目录", initialdir=initial)
+        if chosen:
+            self.setting_vars["outputDir"].set(chosen)
 
     def _collect_settings(self) -> dict:
         patch = {}
@@ -833,6 +847,17 @@ class DesktopApplication(tk.Tk):
         except ValueError:
             messagebox.showwarning("格式错误", "数值字段必须填写数字。", parent=self)
             return
+        raw_dir = str(patch.get("outputDir", "")).strip()
+        if raw_dir:
+            out_path = Path(raw_dir)
+            if not out_path.is_absolute():
+                out_path = PROJECT_ROOT / out_path
+            try:
+                out_path.mkdir(parents=True, exist_ok=True)
+            except OSError as error:
+                messagebox.showerror("产物路径无效", f"无法创建目录 {out_path}：{error}", parent=self)
+                return
+            patch["outputDir"] = str(out_path)
         merged = storage.save_settings(patch)
         self._set_status("设置已保存")
         self.connection_result.set(f"已保存：{merged['model'] or '（未填模型名）'}")
@@ -912,8 +937,13 @@ class DesktopApplication(tk.Tk):
             target = candidate.resolve()
             target.relative_to(PROJECT_ROOT)
         except (ValueError, OSError):
-            messagebox.showerror("无法打开", "仅允许打开项目目录内的路径。", parent=self)
-            return
+            # 自定义产物目录通常在程序目录之外，同样放行
+            output_root = pipeline.resolve_output_dir(storage.load_settings())
+            try:
+                target.relative_to(output_root.resolve())
+            except (ValueError, OSError):
+                messagebox.showerror("无法打开", "仅允许打开程序目录或产物目录内的路径。", parent=self)
+                return
         if not target.exists():
             messagebox.showerror("无法打开", "目标文件或目录不存在。", parent=self)
             return

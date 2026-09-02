@@ -64,6 +64,7 @@ SETTINGS_DEFAULTS = {
     "crawlDelayMs": 500,
     "requestTimeoutSeconds": 15,
     "responseLimitMiB": 2,
+    "outputDir": "",
 }
 
 

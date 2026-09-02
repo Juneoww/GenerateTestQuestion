@@ -25,7 +25,6 @@ import storage
 
 DATA_DIR = storage.DATA_DIR
 OUTPUT_DIR = DATA_DIR / "output"
-HASH_INDEX_PATH = OUTPUT_DIR / ".hash_index.json"
 ABORT_FAILURE_STREAK = 5
 
 
@@ -66,17 +65,30 @@ class _EventTee:
         self.on_event(event)
 
 
-def _load_hash_index() -> dict:
+def resolve_output_dir(settings: dict) -> Path:
+    """产物根目录：settings['outputDir'] 非空则用之（相对路径按程序根目录解析），否则 data/output。"""
+    custom = str((settings or {}).get("outputDir") or "").strip()
+    if not custom:
+        return OUTPUT_DIR
+    path = Path(custom)
+    return path if path.is_absolute() else (storage.PROJECT_ROOT / path)
+
+
+def _hash_index_path(output_root: Path) -> Path:
+    return output_root / ".hash_index.json"
+
+
+def _load_hash_index(index_path: Path) -> dict:
     try:
-        payload = json.loads(HASH_INDEX_PATH.read_text(encoding="utf-8"))
+        payload = json.loads(index_path.read_text(encoding="utf-8"))
         return payload.get("index", {}) if isinstance(payload, dict) else {}
     except (OSError, ValueError):
         return {}
 
 
-def _save_hash_index(index: dict) -> None:
-    HASH_INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
-    HASH_INDEX_PATH.write_text(
+def _save_hash_index(index_path: Path, index: dict) -> None:
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    index_path.write_text(
         json.dumps({"formatVersion": 1, "index": index}, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
@@ -85,7 +97,9 @@ def _save_hash_index(index: dict) -> None:
 def run_batch(params: dict, settings: dict, on_event, fetch_fn=None, generate_fn=None) -> dict:
     started = time.perf_counter()
     batch_id = f"BATCH-{datetime.now():%Y%m%d-%H%M%S}"
-    batch_dir = OUTPUT_DIR / batch_id
+    output_root = resolve_output_dir(settings)
+    hash_path = _hash_index_path(output_root)
+    batch_dir = output_root / batch_id
     crawl_dir = batch_dir / "crawl"
     run_log = batch_dir / "run.log"
     events = _EventTee(on_event, run_log)
@@ -107,7 +121,7 @@ def run_batch(params: dict, settings: dict, on_event, fetch_fn=None, generate_fn
     batch_dir.mkdir(parents=True, exist_ok=True)
     events({"stage": "crawl", "level": "info", "message": f"批次 {batch_id} 开始：{len(selected)} 站，{len(risk_ids)} 小类，共 {total} 题"})
 
-    hash_index = _load_hash_index()
+    hash_index = _load_hash_index(hash_path)
     seen_hashes = set(hash_index.keys())
     crawl_stats: list[dict] = []
     pools: dict[str, list[dict]] = {"zh": [], "en": []}
@@ -247,7 +261,7 @@ def run_batch(params: dict, settings: dict, on_event, fetch_fn=None, generate_fn
 
     new_hashes = {h: {"batchId": batch_id} for h in seen_hashes if h not in hash_index}
     hash_index.update(new_hashes)
-    _save_hash_index(hash_index)
+    _save_hash_index(hash_path, hash_index)
 
     zh_count = sum(1 for q in questions if q["language"] == "zh")
     summary = {

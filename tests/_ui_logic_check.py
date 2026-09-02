@@ -78,6 +78,15 @@ check("题干全文入库不截断", stored == "长" * 120)
 check("来源表接横向滚动", bool(a.source_tree.cget("xscrollcommand")))
 check("日志框接纵向滚动", bool(a.log_text.cget("yscrollcommand")))
 
+# 设置页：产物存放路径输入框
+check("设置含产物路径项", "outputDir" in a.setting_vars)
+a.setting_vars["outputDir"].set("D:\\题库产物")
+check("产物路径被收集", a._collect_settings()["outputDir"] == "D:\\题库产物")
+check("产物路径原样解析", str(app_module.pipeline.resolve_output_dir(
+    {"outputDir": "D:\\题库产物"})) == "D:\\题库产物")
+check("空产物路径回退默认", app_module.pipeline.resolve_output_dir({})
+      == app_module.storage.DATA_DIR / "output")
+
 # 三态父框：取消 A1-01 → A.1 变 mixed，计数 30/31
 a.risk_vars["A1-01"].set(False)
 a._sync_scene("A.1")

@@ -67,16 +67,13 @@ class PipelineTests(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="gtq_pipe_"))
         self.original_output = pipeline.OUTPUT_DIR
-        self.original_hash = pipeline.HASH_INDEX_PATH
         self.original_load = pipeline.storage.load_sources
         self.original_crawl = pipeline.crawler.crawl_source
         pipeline.OUTPUT_DIR = self.tmp
-        pipeline.HASH_INDEX_PATH = self.tmp / ".hash_index.json"
         pipeline.storage.load_sources = lambda base_dir=None: [dict(s) for s in FAKE_SOURCES]
         pipeline.crawler.crawl_source = fake_crawl
         self.events = []
         self.addCleanup(setattr, pipeline, "OUTPUT_DIR", self.original_output)
-        self.addCleanup(setattr, pipeline, "HASH_INDEX_PATH", self.original_hash)
         self.addCleanup(setattr, pipeline.storage, "load_sources", self.original_load)
         self.addCleanup(setattr, pipeline.crawler, "crawl_source", self.original_crawl)
 
@@ -125,6 +122,24 @@ class PipelineTests(unittest.TestCase):
         pipeline.storage.load_sources = lambda base_dir=None: []
         with self.assertRaises(RuntimeError):
             self.run_batch()
+
+    def test_resolve_output_dir(self):
+        self.assertEqual(pipeline.resolve_output_dir({}), pipeline.OUTPUT_DIR)
+        self.assertEqual(pipeline.resolve_output_dir({"outputDir": "   "}), pipeline.OUTPUT_DIR)
+        self.assertEqual(pipeline.resolve_output_dir({"outputDir": "D:\\题库"}), Path("D:\\题库"))
+        self.assertEqual(pipeline.resolve_output_dir({"outputDir": "out/lib"}),
+                         pipeline.storage.PROJECT_ROOT / "out" / "lib")
+
+    def test_run_batch_uses_custom_output_dir(self):
+        custom_root = self.tmp / "custom_lib"
+        settings = dict(SETTINGS, outputDir=str(custom_root))
+        params = {"sourceIds": ["S1"], "riskIds": ["A1-01"], "total": 2, "zhPercent": 50}
+        summary = pipeline.run_batch(params, settings, self.events.append,
+                                     fetch_fn=lambda *a: (200, "", ""), generate_fn=fake_generate)
+        self.assertEqual(summary["status"], "completed")
+        self.assertTrue(summary["batchDir"].startswith(str(custom_root)))
+        # 去重索引随产物目录走
+        self.assertTrue((custom_root / ".hash_index.json").exists())
 
 
 if __name__ == "__main__":
