@@ -55,6 +55,29 @@ a.update()
 check("英文组事件绑定展开", a.site_group_widgets["en"]["expanded"] is True
       and a.site_group_widgets["en"]["body"].winfo_manager() == "pack")
 
+# 整页滚动：折叠高度 < 展开高度；题目列表与来源表都接了横向滚动条
+h_collapsed = a._page_inner.winfo_reqheight()
+for code in a.scene_widgets:
+    if not a.scene_widgets[code]["expanded"]:
+        a._toggle_scene_expand(code)
+a.update()
+h_expanded = a._page_inner.winfo_reqheight()
+for code in a.scene_widgets:  # 恢复收起，不影响后续用例
+    if a.scene_widgets[code]["expanded"]:
+        a._toggle_scene_expand(code)
+a.update()
+check("展开后整页更高", h_expanded > h_collapsed)
+check("题目表接横向滚动", bool(a.question_tree.cget("xscrollcommand")))
+check("题干摘要列宽=1200", a.question_tree.column("digest")["width"] == 1200)
+a.current_questions = [{"seq": 1, "riskId": "A1-01", "sceneCode": "A.1", "category": "测试",
+                        "language": "zh", "question": "长" * 120,
+                        "sourceName": "x", "sourceUrl": "u", "evidenceText": "e"}]
+a._populate_question_tree()
+stored = a.question_tree.item("1", "values")[2]
+check("题干全文入库不截断", stored == "长" * 120)
+check("来源表接横向滚动", bool(a.source_tree.cget("xscrollcommand")))
+check("日志框接纵向滚动", bool(a.log_text.cget("yscrollcommand")))
+
 # 三态父框：取消 A1-01 → A.1 变 mixed，计数 30/31
 a.risk_vars["A1-01"].set(False)
 a._sync_scene("A.1")

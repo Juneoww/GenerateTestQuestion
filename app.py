@@ -21,7 +21,7 @@ import sys
 import threading
 import webbrowser
 from pathlib import Path
-from tkinter import E, END, HORIZONTAL, LEFT, RIGHT, VERTICAL, W, X, Y, messagebox, ttk
+from tkinter import BOTTOM, E, END, HORIZONTAL, LEFT, NW, RIGHT, VERTICAL, W, X, Y, messagebox, ttk
 import tkinter as tk
 
 import crawler
@@ -122,8 +122,52 @@ class DesktopApplication(tk.Tk):
                   padding=(20, 6)).pack(fill=X)
 
     # ------------------------------------------------------------------ 生成页
+    def _make_scrollable(self, parent: tk.Widget) -> ttk.Frame:
+        """把一页内容包进可垂直滚动的 Canvas：内容超出一屏时出现滚动条；
+        不足一屏时把内容撑满可视高度，日志/对照区的弹性布局保持不变。"""
+        outer = ttk.Frame(parent)
+        outer.pack(fill="both", expand=True)
+        canvas = tk.Canvas(outer, highlightthickness=0)
+        vbar = ttk.Scrollbar(outer, orient=VERTICAL, command=canvas.yview)
+        canvas.configure(yscrollcommand=vbar.set)
+        vbar.pack(side=RIGHT, fill=Y)
+        canvas.pack(side=LEFT, fill="both", expand=True)
+        inner = ttk.Frame(canvas)
+        window_id = canvas.create_window((0, 0), window=inner, anchor=NW)
+
+        def sync(_event=None) -> None:
+            if canvas.winfo_width() <= 1:
+                return  # 尚未完成首次布局
+            canvas.itemconfigure(window_id, width=canvas.winfo_width())
+            canvas.itemconfigure(window_id, height=max(inner.winfo_reqheight(), canvas.winfo_height()))
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        inner.bind("<Configure>", sync)
+        canvas.bind("<Configure>", sync)
+        self._page_sync = sync
+        self._page_inner = inner
+        self._page_canvas = canvas
+        self._bind_page_wheel(canvas)
+        return inner
+
+    def _bind_page_wheel(self, canvas: tk.Canvas) -> None:
+        """鼠标滚轮滚动整页；焦点在自带滚动的控件（文本框/树/列表等）时让给它。"""
+
+        def on_wheel(event) -> None:
+            if not canvas.winfo_ismapped():
+                return
+            if isinstance(event.widget, (tk.Text, ttk.Treeview, tk.Listbox, ttk.Spinbox)):
+                return
+            first, last = canvas.yview()
+            if first <= 0.0 and last >= 1.0:
+                return  # 整页放得下，无需滚动
+            canvas.yview_scroll(-1 * (event.delta // 120), "units")
+
+        canvas.bind_all("<MouseWheel>", on_wheel, add=True)
+
     def _build_generate_tab(self) -> None:
-        site_frame = ttk.LabelFrame(self.generate_tab, text="1. 选择网站（已核验可爬）", style="Card.TLabelframe")
+        page = self._make_scrollable(self.generate_tab)
+        site_frame = ttk.LabelFrame(page, text="1. 选择网站（已核验可爬）", style="Card.TLabelframe")
         site_frame.pack(fill=X)
         toolbar = ttk.Frame(site_frame)
         toolbar.pack(fill=X, pady=(0, 4))
@@ -141,7 +185,7 @@ class DesktopApplication(tk.Tk):
         self.site_group_en = ttk.Frame(site_frame)
         self.site_group_en.pack(fill=X)
 
-        type_frame = ttk.LabelFrame(self.generate_tab, text="2. 题目类型（参照 TC260，大类→小类）", style="Card.TLabelframe")
+        type_frame = ttk.LabelFrame(page, text="2. 题目类型（参照 TC260，大类→小类）", style="Card.TLabelframe")
         type_frame.pack(fill=X, pady=(8, 0))
         type_toolbar = ttk.Frame(type_frame)
         type_toolbar.pack(fill=X)
@@ -156,7 +200,7 @@ class DesktopApplication(tk.Tk):
         self.scenes_area = ttk.Frame(type_frame)
         self.scenes_area.pack(fill=X)
 
-        options = ttk.LabelFrame(self.generate_tab, text="3. 本次生成", style="Card.TLabelframe")
+        options = ttk.LabelFrame(page, text="3. 本次生成", style="Card.TLabelframe")
         options.pack(fill=X, pady=(8, 0))
         self.total_var = tk.StringVar(value="50")
         self.zh_var = tk.StringVar(value="80")
@@ -178,12 +222,15 @@ class DesktopApplication(tk.Tk):
         self.go_hint.grid(row=1, column=0, columnspan=7, sticky=W, pady=(0, 2))
         self._generate_widgets = [total_spin, zh_spin, self.start_button]
 
-        split = ttk.PanedWindow(self.generate_tab, orient=VERTICAL)
+        split = ttk.PanedWindow(page, orient=VERTICAL)
         split.pack(fill="both", expand=True, pady=(8, 0))
 
         log_frame = ttk.LabelFrame(split, text="4. 运行日志", style="Card.TLabelframe")
         self.log_text = tk.Text(log_frame, height=5, wrap="word", font=(FONT, 9), state="disabled")
-        self.log_text.pack(fill="both", expand=True)
+        log_scroll = ttk.Scrollbar(log_frame, orient=VERTICAL, command=self.log_text.yview)
+        self.log_text.configure(yscrollcommand=log_scroll.set)
+        self.log_text.pack(side=LEFT, fill="both", expand=True)
+        log_scroll.pack(side=RIGHT, fill=Y)
         self.log_text.tag_configure("warn", foreground="#8a6d00")
         self.log_text.tag_configure("error", foreground="#a4262c")
         split.add(log_frame, weight=1)
@@ -196,14 +243,18 @@ class DesktopApplication(tk.Tk):
         paned.add(left, weight=2)
         paned.add(right, weight=3)
         self.question_tree = ttk.Treeview(left, columns=("seq", "risk", "digest"), show="headings", height=9)
-        for column, title, width in (("seq", "序号", 46), ("risk", "小类", 64), ("digest", "题干摘要", 340)):
+        for column, title, width in (("seq", "序号", 46), ("risk", "小类", 64), ("digest", "题干摘要", 1200)):
             self.question_tree.heading(column, text=title)
-            self.question_tree.column(column, width=width, anchor=W)
+            # 题干摘要列装全文：窗口不够宽时用横向滚动条查看剩余内容
+            self.question_tree.column(column, width=width, minwidth=46 if column == "seq" else 64,
+                                      anchor=W, stretch=column == "digest")
         self.question_tree.bind("<<TreeviewSelect>>", self._on_question_selected)
         tree_scroll = ttk.Scrollbar(left, orient=VERTICAL, command=self.question_tree.yview)
-        self.question_tree.configure(yscrollcommand=tree_scroll.set)
-        self.question_tree.pack(side=LEFT, fill="both", expand=True)
+        x_scroll = ttk.Scrollbar(left, orient=HORIZONTAL, command=self.question_tree.xview)
+        self.question_tree.configure(yscrollcommand=tree_scroll.set, xscrollcommand=x_scroll.set)
+        x_scroll.pack(side=BOTTOM, fill=X)
         tree_scroll.pack(side=RIGHT, fill=Y)
+        self.question_tree.pack(side=LEFT, fill="both", expand=True)
         self.detail_text = tk.Text(right, wrap="word", font=(FONT, 9), state="disabled")
         detail_scroll = ttk.Scrollbar(right, orient=VERTICAL, command=self.detail_text.yview)
         self.detail_text.configure(yscrollcommand=detail_scroll.set)
@@ -211,7 +262,7 @@ class DesktopApplication(tk.Tk):
         detail_scroll.pack(side=RIGHT, fill=Y)
         split.add(compare, weight=3)
 
-        actions = ttk.Frame(self.generate_tab)
+        actions = ttk.Frame(page)
         actions.pack(fill=X, pady=(6, 0))
         ttk.Button(actions, text="加载历史批次", command=self._load_history_batch).pack(side=LEFT)
         self.open_xlsx_button = ttk.Button(actions, text="打开题库 Excel", state="disabled",
@@ -281,6 +332,8 @@ class DesktopApplication(tk.Tk):
         for code in self.scene_vars:
             self._sync_scene(code)
         self._update_selection_summary()
+        if getattr(self, "_page_sync", None):
+            self._page_sync()  # 目录重建后整页高度变化，重算滚动区域
 
     def _build_scene_card(self, scene: dict, previous_risks: dict[str, bool]) -> None:
         """一个大类 = 可折叠卡片：标题条（箭头+三态框+计数+整组按钮）+ 小类芯片区，默认收起。"""
@@ -322,8 +375,7 @@ class DesktopApplication(tk.Tk):
                                     "body": body, "box": scene_box, "prefix": prefix,
                                     "expanded": False}
 
-    @staticmethod
-    def _toggle_collapsible(widgets: dict) -> None:
+    def _toggle_collapsible(self, widgets: dict) -> None:
         if widgets["expanded"]:
             widgets["body"].pack_forget()
             widgets["arrow"].config(text="▶")
@@ -331,6 +383,8 @@ class DesktopApplication(tk.Tk):
             widgets["body"].pack(fill=X, padx=(18, 0), pady=(4, 6))
             widgets["arrow"].config(text="▼")
         widgets["expanded"] = not widgets["expanded"]
+        if getattr(self, "_page_sync", None):
+            self._page_sync()  # 折叠/展开改变整页高度，立即重算滚动区域
 
     def _toggle_scene_expand(self, scene_code: str) -> None:
         self._toggle_collapsible(self.scene_widgets[scene_code])
@@ -501,7 +555,7 @@ class DesktopApplication(tk.Tk):
         self.question_tree.delete(*self.question_tree.get_children())
         for q in self.current_questions:
             self.question_tree.insert("", END, iid=str(q["seq"]), values=(
-                q["seq"], q["riskId"], q["question"][:48]))
+                q["seq"], q["riskId"], q["question"]))
         children = self.question_tree.get_children()
         if children:
             self.question_tree.selection_set(children[0])
@@ -603,9 +657,11 @@ class DesktopApplication(tk.Tk):
             self.source_tree.heading(column, text=labels[column])
             self.source_tree.column(column, width=widths[column], minwidth=50, anchor=W)
         scroll = ttk.Scrollbar(self.sources_tab, orient=VERTICAL, command=self.source_tree.yview)
-        self.source_tree.configure(yscrollcommand=scroll.set)
-        self.source_tree.pack(side=LEFT, fill="both", expand=True)
+        x_scroll = ttk.Scrollbar(self.sources_tab, orient=HORIZONTAL, command=self.source_tree.xview)
+        self.source_tree.configure(yscrollcommand=scroll.set, xscrollcommand=x_scroll.set)
+        x_scroll.pack(side=BOTTOM, fill=X)
         scroll.pack(side=RIGHT, fill=Y)
+        self.source_tree.pack(side=LEFT, fill="both", expand=True)
 
     def _refresh_sources_table(self) -> None:
         if not hasattr(self, "source_tree"):
