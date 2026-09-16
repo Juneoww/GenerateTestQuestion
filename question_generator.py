@@ -51,6 +51,8 @@ def _chat(settings: dict, messages: list[dict]) -> str:
         headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {settings.get('apiKey', '')}",
+            # urllib 默认 UA（Python-urllib/3.x）会被 Cloudflare 按"浏览器签名"封禁（HTTP 403, error code: 1010）
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
         },
         method="POST",
     )
