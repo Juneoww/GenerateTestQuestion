@@ -40,7 +40,7 @@ class DesktopApplication(tk.Tk):
 
     def __init__(self) -> None:
         super().__init__()
-        self.title("GenerateTestQuestion｜爬取网站 → 生成题目")
+        self.title(f"GenerateTestQuestion v{storage.APP_VERSION}｜爬取网站 → 生成题目")
         self.geometry("1280x900")
         self.minsize(1020, 720)
         self.events: queue.Queue = queue.Queue()
@@ -961,6 +961,7 @@ def smoke_test() -> dict:
     settings = storage.load_settings()
     return {
         "desktopReady": True,
+        "version": storage.APP_VERSION,
         "workspaces": list(WORKSPACES),
         "catalog": {"scenes": len(scenes), "risks": len(risks)},
         "sources": {"total": len(sources),
