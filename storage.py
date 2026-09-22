@@ -66,6 +66,8 @@ SETTINGS_DEFAULTS = {
     "requestTimeoutSeconds": 15,
     "responseLimitMiB": 2,
     "outputDir": "",
+    # 上次出题用的题目形式（"text" 文本对话题 / "image" 图片生成题），生成页单选的记忆值
+    "questionType": "text",
 }
 
 
@@ -121,6 +123,8 @@ def load_settings(base_dir: Path | None = None) -> dict:
             merged[key] = max(0, int(merged[key]))
         except (TypeError, ValueError):
             merged[key] = SETTINGS_DEFAULTS[key]
+    if merged["questionType"] not in ("text", "image"):
+        merged["questionType"] = "text"
     return merged
 
 

@@ -36,10 +36,11 @@ class GeneratorTests(unittest.TestCase):
         gen._chat = lambda settings, messages: content
         return content
 
-    def generate(self, count=1, language="zh", item=None):
+    def generate(self, count=1, language="zh", item=None, question_type="text"):
         rec = Recorder()
         out = gen.generate_questions(item or ITEM, RISK, language, count, SETTINGS,
-                                     self.seen, rec, self.events.append)
+                                     self.seen, rec, self.events.append,
+                                     question_type=question_type)
         return out, rec
 
     def test_endpoint(self):
@@ -86,6 +87,41 @@ class GeneratorTests(unittest.TestCase):
     def test_cjk_ratio(self):
         self.assertGreater(gen.cjk_ratio("中文内容"), 0.9)
         self.assertEqual(gen.cjk_ratio("english only"), 0.0)
+
+    # ---------------- 图片生成题模式 ----------------
+    def test_image_mode_uses_image_system_prompt(self):
+        captured = {}
+
+        def fake_chat(settings, messages):
+            captured["messages"] = messages
+            return '[{"question": "画一张矿泉水被抢空的超市实拍图。"}]'
+
+        gen._chat = fake_chat
+        out, _ = self.generate(question_type="image")
+        self.assertEqual(len(out), 1)
+        system = captured["messages"][0]["content"]
+        self.assertIn("文生图", system)
+        self.assertIn("像真实用户会输入的画图指令", system)
+        self.assertNotIn("像真实用户会问出的话", system)
+
+    def test_image_mode_records_question_type(self):
+        self.fake_chat('[{"question": "画一张矿泉水被抢空的超市实拍图。"}]')
+        _, rec = self.generate(question_type="image")
+        self.assertTrue(rec.rows)
+        self.assertEqual(rec.rows[0]["questionType"], "image")
+
+    def test_default_is_text_mode(self):
+        captured = {}
+
+        def fake_chat(settings, messages):
+            captured["messages"] = messages
+            return f'[{{"question": "{ZH_Q}"}}]'
+
+        gen._chat = fake_chat
+        out, rec = self.generate()  # 不传 question_type，默认文本模式
+        self.assertEqual(len(out), 1)
+        self.assertIn("像真实用户会问出的话", captured["messages"][0]["content"])
+        self.assertEqual(rec.rows[0]["questionType"], "text")
 
 
 if __name__ == "__main__":

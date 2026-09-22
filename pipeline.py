@@ -4,7 +4,8 @@
   配额拆分与小类轮转分配为纯函数；事件经 EventTee 同时投递 UI 队列与 run.log；
   连续 5 次出题空手而归触发熔断（aborted），已产出题目照常导出；全局哈希索引
   data/output/.hash_index.json 支撑跨批次去重。
-输入: params{sourceIds, riskIds, total, zhPercent}、settings、on_event 回调。
+输入: params{sourceIds, riskIds, total, zhPercent, questionType}、settings、on_event 回调。
+      questionType："text"（默认）=面向 AI 服务的测试问题；"image"=文生图提示词（批次名带 -IMG）。
 输出: 汇总 dict（questions、批次目录路径、统计、shortage、status）。
 依赖: Python 3.10+ 标准库、openpyxl（经 excel_export）。
 用法:
@@ -96,7 +97,9 @@ def _save_hash_index(index_path: Path, index: dict) -> None:
 
 def run_batch(params: dict, settings: dict, on_event, fetch_fn=None, generate_fn=None) -> dict:
     started = time.perf_counter()
-    batch_id = f"BATCH-{datetime.now():%Y%m%d-%H%M%S}"
+    question_type = str(params.get("questionType") or "text")
+    batch_id = (f"BATCH-{datetime.now():%Y%m%d-%H%M%S}"
+                + ("-IMG" if question_type == "image" else ""))
     output_root = resolve_output_dir(settings)
     hash_path = _hash_index_path(output_root)
     batch_dir = output_root / batch_id
@@ -154,7 +157,8 @@ def run_batch(params: dict, settings: dict, on_event, fetch_fn=None, generate_fn
 
     def generate(item, risk, language, count):
         actual = generate_fn or generator.generate_questions
-        return actual(item, risk, language, count, settings, seen_questions, record_call, events)
+        return actual(item, risk, language, count, settings, seen_questions, record_call, events,
+                      question_type=question_type)
 
     seen_questions: set[str] = set()
     questions: list[dict] = []
@@ -183,6 +187,7 @@ def run_batch(params: dict, settings: dict, on_event, fetch_fn=None, generate_fn
             for piece in got:
                 questions.append({
                     **piece,
+                    "questionType": question_type,
                     "language": lang,
                     "sceneCode": risk["sceneCode"],
                     "scene": risk["scene"],
@@ -217,7 +222,8 @@ def run_batch(params: dict, settings: dict, on_event, fetch_fn=None, generate_fn
         "batchId": batch_id,
         "createdAt": now_iso(),
         "params": {"sourceIds": params.get("sourceIds", []), "riskIds": risk_ids,
-                   "total": total, "zhPercent": zh_percent, "model": settings.get("model", "")},
+                   "total": total, "zhPercent": zh_percent, "questionType": question_type,
+                   "model": settings.get("model", "")},
         "questions": questions,
         "shortage": shortage,
     }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -241,7 +247,8 @@ def run_batch(params: dict, settings: dict, on_event, fetch_fn=None, generate_fn
         "createdAt": now_iso(),
         "status": "aborted" if aborted else "completed",
         "params": {"sourceIds": params.get("sourceIds", []), "riskIds": risk_ids,
-                   "total": total, "zhPercent": zh_percent, "model": settings.get("model", "")},
+                   "total": total, "zhPercent": zh_percent, "questionType": question_type,
+                   "model": settings.get("model", "")},
         "crawl": {"bySource": crawl_stats},
         "generate": {
             "calls": call_count,

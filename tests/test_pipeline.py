@@ -43,7 +43,8 @@ def fake_crawl(source, settings, on_event, out_dir, seen_hashes, fetch_fn=None):
             "status": "completed", "items": items}
 
 
-def fake_generate(item, risk, language, count, settings, seen, record_call, events):
+def fake_generate(item, risk, language, count, settings, seen, record_call, events,
+                  question_type="text"):
     produced = []
     for i in range(count):
         q = f"针对{risk['riskId']}的{language}测试问题{item['itemId']}{i}？"
@@ -53,7 +54,8 @@ def fake_generate(item, risk, language, count, settings, seen, record_call, even
         seen.add(digest)
         produced.append({"question": q})
     record_call({"ts": "2026-08-31T00:00:00Z", "model": settings["model"], "riskId": risk["riskId"],
-                 "language": language, "itemId": item["itemId"], "asked": count, "got": len(produced),
+                 "questionType": question_type, "language": language, "itemId": item["itemId"],
+                 "asked": count, "got": len(produced),
                  "status": "ok" if produced else "parse_error", "attempt": 1,
                  "elapsedMs": 1, "promptChars": 100, "error": None})
     return produced
@@ -77,9 +79,10 @@ class PipelineTests(unittest.TestCase):
         self.addCleanup(setattr, pipeline.storage, "load_sources", self.original_load)
         self.addCleanup(setattr, pipeline.crawler, "crawl_source", self.original_crawl)
 
-    def run_batch(self, generate_fn=fake_generate, total=3, zh_percent=67, risk_ids=None):
+    def run_batch(self, generate_fn=fake_generate, total=3, zh_percent=67, risk_ids=None,
+                  question_type="text"):
         params = {"sourceIds": ["S1", "S2"], "riskIds": risk_ids or ["A1-01", "A1-02"],
-                  "total": total, "zhPercent": zh_percent}
+                  "total": total, "zhPercent": zh_percent, "questionType": question_type}
         return pipeline.run_batch(params, SETTINGS, self.events.append,
                                   fetch_fn=lambda *a: (200, "", ""), generate_fn=generate_fn)
 
@@ -111,12 +114,35 @@ class PipelineTests(unittest.TestCase):
 
     def test_shortage_when_pool_exhausted(self):
         # 每条原文只出 1 道（maxQuestionsPerItem 生效上限外的池子限制由 visited 模拟）
-        limited = lambda item, risk, language, count, settings, seen, record_call, events: fake_generate(item, risk, language, min(count, 1), settings, seen, record_call, events)
+        def limited(item, risk, language, count, settings, seen, record_call, events,
+                    question_type="text"):
+            return fake_generate(item, risk, language, min(count, 1), settings, seen,
+                                 record_call, events, question_type=question_type)
         summary = self.run_batch(generate_fn=limited, total=6, zh_percent=100, risk_ids=["A1-01"])
         # 2 条中文素材，每条 1 道 → 最多 2 题，目标 6 → 缺口
         self.assertEqual(summary["questionCount"], 2)
         self.assertEqual(len(summary["shortage"]), 1)
         self.assertEqual(summary["shortage"][0]["target"], 6)
+
+    def test_image_batch_marks_dir_and_questions(self):
+        summary = self.run_batch(total=2, zh_percent=100, risk_ids=["A1-01"], question_type="image")
+        batch_dir = Path(summary["batchDir"])
+        self.assertTrue(summary["batchId"].endswith("-IMG"), summary["batchId"])
+        self.assertTrue(batch_dir.name.endswith("-IMG"))
+        self.assertTrue(all(q["questionType"] == "image" for q in summary["questions"]))
+        doc = json.loads((batch_dir / "questions.json").read_text(encoding="utf-8"))
+        self.assertEqual(doc["params"]["questionType"], "image")
+        manifest = json.loads((batch_dir / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["params"]["questionType"], "image")
+        # 留痕行区分题目形式
+        calls = [json.loads(line) for line in
+                 (batch_dir / "llm_calls.jsonl").read_text(encoding="utf-8").splitlines()]
+        self.assertTrue(calls and all(c["questionType"] == "image" for c in calls))
+
+    def test_text_batch_default_keeps_plain_dir_name(self):
+        summary = self.run_batch()  # 不传 question_type 视为 text
+        self.assertNotIn("-IMG", summary["batchId"])
+        self.assertTrue(all(q["questionType"] == "text" for q in summary["questions"]))
 
     def test_no_ready_sources_raises(self):
         pipeline.storage.load_sources = lambda base_dir=None: []

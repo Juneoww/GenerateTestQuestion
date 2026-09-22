@@ -1,6 +1,7 @@
 """功能:
   提供 GenerateTestQuestion 桌面端（纯 Python 单栈）：生成、来源管理、设置三个工作区，
   以"爬取网站 → 生成题目（测试提示集）"为唯一主流程，实时日志与原文↔题目对照。
+  题目形式二选一：文本对话题（测文本模型）或图片生成题（题干为文生图提示词，批次名带 -IMG）。
 实现:
   Tkinter 构建三页；爬取与出题由 pipeline 在后台线程执行，事件经 queue.Queue 投递，
   主线程 after 轮询刷新日志；来源核验异步执行并同步网站名单/核验日志。
@@ -202,25 +203,38 @@ class DesktopApplication(tk.Tk):
 
         options = ttk.LabelFrame(page, text="3. 本次生成", style="Card.TLabelframe")
         options.pack(fill=X, pady=(8, 0))
+        self.question_type_var = tk.StringVar(value=storage.load_settings().get("questionType", "text"))
         self.total_var = tk.StringVar(value="50")
         self.zh_var = tk.StringVar(value="80")
-        ttk.Label(options, text="生成数量").grid(row=0, column=0, sticky=W, padx=(0, 4), pady=4)
+        mode_row = ttk.Frame(options)
+        mode_row.grid(row=0, column=0, columnspan=7, sticky=W, pady=(4, 2))
+        ttk.Label(mode_row, text="题目形式").pack(side=LEFT, padx=(0, 10))
+        self.text_mode_radio = ttk.Radiobutton(
+            mode_row, text="文本对话题（测文本模型）", value="text",
+            variable=self.question_type_var, command=self._update_selection_summary)
+        self.text_mode_radio.pack(side=LEFT)
+        self.image_mode_radio = ttk.Radiobutton(
+            mode_row, text="图片生成题（测文生图模型）", value="image",
+            variable=self.question_type_var, command=self._update_selection_summary)
+        self.image_mode_radio.pack(side=LEFT, padx=(18, 0))
+        ttk.Label(options, text="生成数量").grid(row=1, column=0, sticky=W, padx=(0, 4), pady=4)
         total_spin = ttk.Spinbox(options, from_=1, to=1000, textvariable=self.total_var, width=8)
-        total_spin.grid(row=0, column=1, sticky=W, padx=(0, 14))
-        ttk.Label(options, text="中文占比").grid(row=0, column=2, sticky=W, padx=(0, 4))
+        total_spin.grid(row=1, column=1, sticky=W, padx=(0, 14))
+        ttk.Label(options, text="中文占比").grid(row=1, column=2, sticky=W, padx=(0, 4))
         zh_spin = ttk.Spinbox(options, from_=0, to=100, textvariable=self.zh_var, width=6)
-        zh_spin.grid(row=0, column=3, sticky=W, padx=(0, 4))
-        ttk.Label(options, text="%", style="Subtle.TLabel").grid(row=0, column=4, sticky=W)
+        zh_spin.grid(row=1, column=3, sticky=W, padx=(0, 4))
+        ttk.Label(options, text="%", style="Subtle.TLabel").grid(row=1, column=4, sticky=W)
         self.selection_summary = ttk.Label(options, text="当前：0 个网站 · 0/0 个小类",
                                            style="Subtle.TLabel")
-        self.selection_summary.grid(row=0, column=5, sticky=E, padx=(8, 0))
+        self.selection_summary.grid(row=1, column=5, sticky=E, padx=(8, 0))
         self.start_button = ttk.Button(options, text="开始生成", style="Accent.TButton",
                                        command=self._start_batch)
-        self.start_button.grid(row=0, column=6, sticky="e", padx=(20, 0))
+        self.start_button.grid(row=1, column=6, sticky="e", padx=(20, 0))
         options.columnconfigure(5, weight=1)
         self.go_hint = ttk.Label(options, text="", style="Subtle.TLabel")
-        self.go_hint.grid(row=1, column=0, columnspan=7, sticky=W, pady=(0, 2))
-        self._generate_widgets = [total_spin, zh_spin, self.start_button]
+        self.go_hint.grid(row=2, column=0, columnspan=7, sticky=W, pady=(0, 2))
+        self._generate_widgets = [total_spin, zh_spin, self.text_mode_radio,
+                                  self.image_mode_radio, self.start_button]
 
         split = ttk.PanedWindow(page, orient=VERTICAL)
         split.pack(fill="both", expand=True, pady=(8, 0))
@@ -460,7 +474,8 @@ class DesktopApplication(tk.Tk):
             sids = [sid for sid, l in self.site_language.items() if l == lang]
             n = sum(1 for sid in sids if self.site_vars[sid].get())
             widgets["count"].config(text=f"已选 {n}/{len(sids)}")
-        self.selection_summary.config(text=f"当前：{site_n} 个网站 · {risk_n}/{risk_total} 个小类")
+        mode_name = "图片生成题" if self.question_type_var.get() == "image" else "文本对话题"
+        self.selection_summary.config(text=f"当前：{site_n} 个网站 · {risk_n}/{risk_total} 个小类 · {mode_name}")
         if self.running:
             return
         if not risk_total:
@@ -475,8 +490,10 @@ class DesktopApplication(tk.Tk):
             self.go_hint.config(text=f"还差{missing}：请至少勾选 1 个{missing}。", foreground="#A4262C")
         else:
             self.start_button.state(["!disabled"])
-            self.go_hint.config(text=f"就绪：将按 {self.total_var.get()} 题、中文 {self.zh_var.get()}% 生成，"
-                                     "来源仅从已选网站抓取。", foreground="#1E7A3C")
+            extra = "，批次名带 -IMG" if mode_name == "图片生成题" else ""
+            self.go_hint.config(text=f"就绪：将按 {self.total_var.get()} 题、中文 {self.zh_var.get()}% "
+                                     f"生成{mode_name}{extra}，来源仅从已选网站抓取。",
+                                foreground="#1E7A3C")
 
     def _selected_site_ids(self) -> list[str]:
         return sorted(sid for sid, v in self.site_vars.items() if v.get())
@@ -511,7 +528,10 @@ class DesktopApplication(tk.Tk):
         if not (settings["baseUrl"] and settings["model"]):
             messagebox.showwarning("缺少模型配置", "请先到“设置”页配置接口地址、API Key 与模型名。", parent=self)
             return
-        params = {"sourceIds": site_ids, "riskIds": risk_ids, "total": total, "zhPercent": zh_percent}
+        question_type = self.question_type_var.get()
+        params = {"sourceIds": site_ids, "riskIds": risk_ids, "total": total, "zhPercent": zh_percent,
+                  "questionType": question_type}
+        storage.save_settings({"questionType": question_type})  # 记住本次的题目形式
         self.running = True
         for widget in self._generate_widgets:
             widget.state(["disabled"])
@@ -619,8 +639,15 @@ class DesktopApplication(tk.Tk):
             return
         self.detail_text.configure(state="normal")
         self.detail_text.delete("1.0", END)
+        if question.get("questionType") == "image":
+            type_line = "【题型】图片生成题（题干为文生图提示词）\n"
+        elif question.get("questionType"):
+            type_line = "【题型】文本对话题\n"
+        else:
+            type_line = ""  # 历史批次题目无此字段，不显示
         self.detail_text.insert("1.0", (
             f"【题干】{question['question']}\n\n"
+            f"{type_line}"
             f"【类型】{question['sceneCode']} {question['riskId']} {question['category']}"
             f"（{question['language']}）\n"
             f"【来源】{question['sourceName']}　{question['sourceUrl']}\n\n"

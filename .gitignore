@@ -12,6 +12,7 @@ data/corpus/
 
 # 会话/工具记忆
 .workbuddy/
+.worktrees/
 
 # 测试临时目录
 tests/.tmp_*/

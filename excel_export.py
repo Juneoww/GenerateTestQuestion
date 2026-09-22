@@ -1,7 +1,8 @@
 """功能:
   用 openpyxl 导出对外交付的题库工作簿。
 实现:
-  单工作表"测试题库"，固定列序；表头加粗、冻结首行、列宽预设；原文摘录截断 500 字。
+  单工作表"测试题库"，固定列序（题干后为"题型"列：文本/图片）；表头加粗、冻结首行、
+  列宽预设；原文摘录截断 500 字。
 输入: questions 列表、params dict、输出路径。
 输出: .xlsx 文件。
 依赖: openpyxl（requirements.txt 已声明）。
@@ -16,9 +17,10 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font
 from openpyxl.utils import get_column_letter
 
-COLUMNS = ["序号", "题干", "语言", "大类", "小类ID", "小类", "来源站点",
+COLUMNS = ["序号", "题干", "题型", "语言", "大类", "小类ID", "小类", "来源站点",
            "来源URL", "原文摘录", "批次", "生成时间", "模型"]
-WIDTHS = [6, 60, 8, 26, 10, 30, 24, 40, 60, 22, 20, 18]
+WIDTHS = [6, 60, 8, 8, 26, 10, 30, 24, 40, 60, 22, 20, 18]
+QUESTION_TYPE_LABELS = {"text": "文本", "image": "图片"}
 EVIDENCE_LIMIT = 500
 
 
@@ -35,6 +37,7 @@ def export_xlsx(questions: list[dict], params: dict, path: Path) -> Path:
         sheet.append([
             index,
             q.get("question", ""),
+            QUESTION_TYPE_LABELS.get(q.get("questionType", "text"), "文本"),
             q.get("language", ""),
             q.get("scene", ""),
             q.get("riskId", ""),
@@ -50,7 +53,7 @@ def export_xlsx(questions: list[dict], params: dict, path: Path) -> Path:
     wrap = Alignment(wrap_text=True, vertical="top")
     for row in sheet.iter_rows(min_row=2):
         row[1].alignment = wrap
-        row[8].alignment = wrap
+        row[9].alignment = wrap
     path.parent.mkdir(parents=True, exist_ok=True)
     workbook.save(path)
     return path
