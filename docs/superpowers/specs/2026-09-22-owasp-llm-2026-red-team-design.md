@@ -67,16 +67,18 @@ https://genai.owasp.org/resource/owasp-genai-llm-top-10-2026/
 
 ### 3.3 目标能力筛选
 
-OWASP 用例在生成前要求至少选择一种目标能力：
+OWASP 用例在生成前要求至少选择一种目标能力。目录和批次使用稳定的机器可读 ID，界面只显示中文名称：
 
-- 纯聊天
-- RAG / 向量检索
-- 工具调用或 Agent
-- 跨会话持久化记忆
-- 多模态文件、图像或音频输入
-- 第三方模型、插件、提示词或工具供应链
-- 数据、模型或微调更新管道
-- 下游输出渲染、解析或自动化执行
+| capabilityId | 界面名称 |
+|---|---|
+| chat | 纯聊天 |
+| rag | RAG / 向量检索 |
+| tools | 工具调用或 Agent |
+| memory | 跨会话持久化记忆 |
+| multimodal | 多模态文件、图像或音频输入 |
+| supply-chain | 第三方模型、插件、提示词或工具供应链 |
+| update-pipeline | 数据、模型或微调更新管道 |
+| downstream-output | 下游输出渲染、解析或自动化执行 |
 
 系统根据能力过滤测试蓝图。没有匹配蓝图的风险不允许被选中，并给出原因；这样不会导出无法在目标系统执行的用例。纯聊天默认选中，用户可叠加其他能力。
 
@@ -114,7 +116,7 @@ OWASP 批次先按已选 primaryRiskId 做现有的均分轮转：每个已选�
 - stepNo：从 1 开始、连续的顺序号。
 - sessionId：例如 SESSION-A、SESSION-B；单轮用例也显式保存会话。
 - actor：tester 或 fixture。
-- stepType：setup、prompt、attachment、tool-result 或 assertion。
+- stepType：setup、prompt、attachment、tool-result、output-capture 或 assertion。
 - instruction：需要执行的准备动作或要输入被测系统的文本。
 - fixture：测试附件、测试标记、受控工具返回值或空值。
 - expectedCheckpoint：本步骤应观察到的安全边界。
@@ -140,20 +142,22 @@ OWASP 批次先按已选 primaryRiskId 做现有的均分轮转：每个已选�
 
 | 主风险 | blueprintId | 所需能力 | 固定步骤骨架 | 关联或边界 |
 |---|---|---|---|---|
-| LLM01:2026 | OWASP-LLM01-DIRECT | 纯聊天 | prompt / assertion | 输入是数据而非可信指令 |
-| LLM01:2026 | OWASP-LLM01-RAG-INDIRECT | RAG / 向量检索 | setup / prompt / assertion | 可关联 LLM09 |
-| LLM01:2026 | OWASP-LLM01-MEMORY-CROSS-SESSION | 跨会话持久化记忆 | setup / Session-A prompt / Session-B prompt / assertion | 可关联 LLM02、LLM08；必须使用两个不同会话 |
-| LLM01:2026 | OWASP-LLM01-MULTIMODAL | 多模态输入 | attachment / prompt / assertion | 夹具仅为手工创建规范 |
-| LLM02:2026 | OWASP-LLM02-CONTEXT-DATA | 纯聊天 | setup / prompt / assertion | 使用无价值测试标记，不使用真实数据 |
-| LLM02:2026 | OWASP-LLM02-CROSS-SESSION | 跨会话持久化记忆 | setup / Session-A prompt / Session-B prompt / assertion | 可关联 LLM08；必须使用两个不同会话 |
-| LLM03:2026 | OWASP-LLM03-POLICY-GATE | 工具调用或 Agent | sandbox setup / prompt / tool-result / assertion | 只验证模型输出到宿主策略层的边界；需参照 Agentic 覆盖说明 |
-| LLM04:2026 | OWASP-LLM04-THIRD-PARTY-COMPONENT | 第三方组件供应链 | fixture setup / inspect prompt / assertion | 仅使用描述性组件元数据夹具，不下载或运行制品 |
-| LLM05:2026 | OWASP-LLM05-INGESTION-POISONING | 数据、模型或微调更新管道 | fixture setup / import-or-query prompt / assertion | 可关联 LLM01、LLM09；要求来源、审批或隔离检查点 |
-| LLM06:2026 | OWASP-LLM06-RESOURCE-BUDGET | 纯聊天 | controlled-environment setup / prompt / assertion | 只验证预算、速率或长度边界；不执行资源耗尽攻击 |
-| LLM07:2026 | OWASP-LLM07-VERIFIABILITY | 纯聊天 | prompt / assertion | 验收事实核验、不确定性或来源边界，不要求固定措辞 |
-| LLM08:2026 | OWASP-LLM08-HIDDEN-CONTEXT | 纯聊天 | prompt / assertion | 可关联 LLM02；验证不暴露系统提示、隐藏链路或内部上下文 |
-| LLM09:2026 | OWASP-LLM09-TENANT-RETRIEVAL | RAG / 向量检索 | isolated-corpus setup / prompt / assertion | 可关联 LLM01、LLM05；验证检索和租户隔离 |
-| LLM10:2026 | OWASP-LLM10-DOWNSTREAM-VALIDATION | 下游输出渲染、解析或自动化执行 | prompt / output-capture / assertion | 验证应用层结构校验、转义或策略执行，不要求模型自身判断 |
+| LLM01:2026 | OWASP-LLM01-DIRECT | chat | prompt / assertion | 输入是数据而非可信指令 |
+| LLM01:2026 | OWASP-LLM01-RAG-INDIRECT | rag | setup / prompt / assertion | 可关联 LLM09 |
+| LLM01:2026 | OWASP-LLM01-MEMORY-CROSS-SESSION | memory | setup / Session-A prompt / Session-B prompt / assertion | 可关联 LLM02、LLM08；必须使用两个不同会话 |
+| LLM01:2026 | OWASP-LLM01-MULTIMODAL | multimodal | attachment / prompt / assertion | 夹具仅为手工创建规范 |
+| LLM02:2026 | OWASP-LLM02-CONTEXT-DATA | chat | setup / prompt / assertion | 使用无价值测试标记，不使用真实数据 |
+| LLM02:2026 | OWASP-LLM02-CROSS-SESSION | memory | setup / Session-A prompt / Session-B prompt / assertion | 可关联 LLM08；必须使用两个不同会话 |
+| LLM03:2026 | OWASP-LLM03-POLICY-GATE | tools | sandbox setup / prompt / tool-result / assertion | 只验证模型输出到宿主策略层的边界；需参照 Agentic 覆盖说明 |
+| LLM04:2026 | OWASP-LLM04-THIRD-PARTY-COMPONENT | supply-chain | fixture setup / inspect prompt / assertion | 仅使用描述性组件元数据夹具，不下载或运行制品 |
+| LLM05:2026 | OWASP-LLM05-INGESTION-POISONING | update-pipeline | fixture setup / import-or-query prompt / assertion | 可关联 LLM01、LLM09；要求来源、审批或隔离检查点 |
+| LLM06:2026 | OWASP-LLM06-RESOURCE-BUDGET | chat | controlled-environment setup / prompt / assertion | 只验证预算、速率或长度边界；不执行资源耗尽攻击 |
+| LLM07:2026 | OWASP-LLM07-VERIFIABILITY | chat | prompt / assertion | 验收事实核验、不确定性或来源边界，不要求固定措辞 |
+| LLM08:2026 | OWASP-LLM08-HIDDEN-CONTEXT | chat | prompt / assertion | 可关联 LLM02；验证不暴露系统提示、隐藏链路或内部上下文 |
+| LLM09:2026 | OWASP-LLM09-TENANT-RETRIEVAL | rag | isolated-corpus setup / prompt / assertion | 可关联 LLM01、LLM05；验证检索和租户隔离 |
+| LLM10:2026 | OWASP-LLM10-DOWNSTREAM-VALIDATION | downstream-output | prompt / output-capture / assertion | 验证应用层结构校验、转义或策略执行，不要求模型自身判断 |
+
+单轮用例指只有一次输入被测系统的 prompt，不代表 JSON 或 Excel 只有一行：它固定包含一条 prompt 步骤和至少一条 assertion 步骤。多轮或跨会话用例再在此基础上增加 setup、attachment、tool-result 或 output-capture 步骤。
 
 主风险按蓝图选择；若场景天然涉及多个风险，关联风险写入 relatedRiskIds。生成配额只按 primaryRiskId 统计，避免同一用例被重复计数。
 
@@ -167,7 +171,7 @@ v3.0.0 不生成、不打包、不下载二进制附件、可执行文件或不�
 
 ### 4.5 LLM 与 Agentic 范围边界
 
-LLM03 的蓝图只验证“LLM 输出到宿主应用策略层”的最小权限、显式确认和参数校验边界。凡是需要自主规划、多 Agent 协作、工具发现、长期自主执行或 Agent 记忆治理的场景，均标记 requiresAgenticCompanion=true，并在官方参考旁提示需配套评估 OWASP Top 10 for Agentic Applications。
+LLM03 的蓝图只验证“LLM 输出到宿主应用策略层”的最小权限、显式确认和参数校验边界。凡是需要自主规划、多 Agent 协作、工具发现、长期自主执行或 Agent 记忆治理的场景，均在蓝图上标记 requiresAgenticCompanion=true；批次序列化时将该值复制到每个 test case，方便 JSON、Excel 和 UI 一致提示需配套评估 OWASP Top 10 for Agentic Applications。
 
 持久化记忆蓝图同样只测试 LLM 应用的会话和上下文隔离；若记忆驱动自主行动，则执行人员必须同时采用 Agentic 框架。本版本不声称完整覆盖 Agentic Top 10。
 
@@ -290,7 +294,7 @@ OWASP 批次使用与现有批次不冲突的命名，例如 OWASP-2026-YYYYMMDD
 
 ### 9.2 生成器和校验器
 
-- 单轮蓝图可以生成并解析为单步骤用例。
+- 单轮蓝图可以生成并解析为恰好一条 prompt 步骤和至少一条 assertion 步骤的用例。
 - 跨会话蓝图必须生成连续步骤和两个不同会话。
 - RAG、工具、附件蓝图必须包含其必需的 setup 或 fixture 字段。
 - 无效 JSON、错误步骤数、风险不匹配、重复用例和不安全夹具会被拒绝或重试。
