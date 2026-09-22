@@ -26,7 +26,7 @@ def _app_root() -> Path:
 
 PROJECT_ROOT = _app_root()
 DATA_DIR = PROJECT_ROOT / "data"
-APP_VERSION = "1.0.3"  # 发版时与 GitHub Releases 的 tag 同步修改
+APP_VERSION = "2.0.0"  # 发版时与 GitHub Releases 的 tag 同步修改
 
 if getattr(sys, "frozen", False) and not DATA_DIR.exists():
     # 首次运行：把随包内置的来源清单/风险目录释放到 exe 旁边。

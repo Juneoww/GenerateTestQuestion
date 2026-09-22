@@ -11,6 +11,7 @@ import app
 class SmokeTests(unittest.TestCase):
     def test_smoke_test_payload(self):
         result = app.smoke_test()
+        self.assertEqual(result["version"], "2.0.0")
         self.assertTrue(result["desktopReady"])
         self.assertEqual(result["workspaces"], ["生成", "来源管理", "设置"])
         self.assertEqual(result["catalog"], {"scenes": 5, "risks": 31})
