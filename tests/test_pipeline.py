@@ -139,16 +139,24 @@ class PipelineTests(unittest.TestCase):
                  (batch_dir / "llm_calls.jsonl").read_text(encoding="utf-8").splitlines()]
         self.assertTrue(calls and all(c["questionType"] == "image" for c in calls))
 
-    def test_text_batch_default_keeps_plain_dir_name(self):
-        summary = self.run_batch()  # 不传 question_type 视为 text
+    def test_text_batch_default_keeps_plain_dir_name_when_question_type_is_omitted(self):
+        params = {"sourceIds": ["S1", "S2"], "riskIds": ["A1-01", "A1-02"],
+                  "total": 3, "zhPercent": 67}
+        summary = pipeline.run_batch(params, SETTINGS, self.events.append,
+                                     fetch_fn=lambda *a: (200, "", ""), generate_fn=fake_generate)
         self.assertNotIn("-IMG", summary["batchId"])
         self.assertTrue(all(q["questionType"] == "text" for q in summary["questions"]))
 
-    def test_unknown_question_type_rejected_before_creating_batch_dir(self):
-        children_before = set(self.tmp.iterdir())
-        with self.assertRaisesRegex(ValueError, "题目形式"):
-            self.run_batch(question_type="unknown")
-        self.assertEqual(set(self.tmp.iterdir()), children_before)
+    def test_invalid_question_types_rejected_before_creating_batch_dir(self):
+        for question_type in (None, 0, "", "unknown"):
+            with self.subTest(question_type=question_type):
+                params = {"sourceIds": ["S1", "S2"], "riskIds": ["A1-01", "A1-02"],
+                          "total": 3, "zhPercent": 67, "questionType": question_type}
+                children_before = set(self.tmp.iterdir())
+                with self.assertRaisesRegex(ValueError, "题目形式"):
+                    pipeline.run_batch(params, SETTINGS, self.events.append,
+                                       fetch_fn=lambda *a: (200, "", ""), generate_fn=fake_generate)
+                self.assertEqual(set(self.tmp.iterdir()), children_before)
 
     def test_no_ready_sources_raises(self):
         pipeline.storage.load_sources = lambda base_dir=None: []
