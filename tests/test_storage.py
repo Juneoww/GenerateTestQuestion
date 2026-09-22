@@ -1,4 +1,5 @@
 """集成测试：三个 JSON 的读写、默认值合并与风险目录完整性。"""
+import json
 import sys
 import tempfile
 import unittest
@@ -33,6 +34,31 @@ class StorageTests(unittest.TestCase):
         self.assertNotIn("unknown", merged)
         again = storage.load_settings(self.base)
         self.assertEqual(again["apiKey"], "secret")
+
+    def test_legacy_settings_file_defaults_question_type_to_text(self):
+        (self.base / "settings.json").write_text(
+            json.dumps({"apiKey": "legacy-key"}), encoding="utf-8"
+        )
+
+        loaded = storage.load_settings(self.base)
+
+        self.assertEqual(loaded["questionType"], "text")
+
+    def test_settings_image_question_type_persists_through_save_and_load(self):
+        saved = storage.save_settings({"questionType": "image"}, self.base)
+        loaded = storage.load_settings(self.base)
+
+        self.assertEqual(saved["questionType"], "image")
+        self.assertEqual(loaded["questionType"], "image")
+
+    def test_invalid_settings_question_type_defaults_to_text(self):
+        (self.base / "settings.json").write_text(
+            json.dumps({"questionType": "unknown"}), encoding="utf-8"
+        )
+
+        loaded = storage.load_settings(self.base)
+
+        self.assertEqual(loaded["questionType"], "text")
 
     def test_catalog_integrity(self):
         scenes = storage.load_catalog()
