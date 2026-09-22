@@ -3,7 +3,7 @@
 实现:
   配额拆分与小类轮转分配为纯函数；事件经 EventTee 同时投递 UI 队列与 run.log；
   连续 5 次出题空手而归触发熔断（aborted），已产出题目照常导出；全局哈希索引
-  data/output/.hash_index.json 支撑跨批次去重。
+  data/output/.hash_index.json 支撑跨批次去重。无素材或零题产出记为 failed，并保留失败留痕。
 输入: params{sourceIds, riskIds, total, zhPercent, questionType}、settings、on_event 回调。
       questionType："text"（默认）=面向 AI 服务的测试问题；"image"=文生图提示词（批次名带 -IMG）。
 输出: 汇总 dict（questions、批次目录路径、统计、shortage、status）。
@@ -241,11 +241,28 @@ def run_batch(params: dict, settings: dict, on_event, fetch_fn=None, generate_fn
         with calls_path.open(encoding="utf-8") as fh:
             call_count = sum(1 for _ in fh)
 
+    # 正常走到导出阶段不等于成功出题；失败和中止的原因在汇总、日志与 UI 中保持一致。
+    batch_status = "aborted" if aborted else "completed"
+    batch_error = ""
+    if aborted:
+        batch_error = f"连续 {ABORT_FAILURE_STREAK} 次出题无产出，已中止批次；已产出的题目仍保留。"
+    elif total > 0 and not questions:
+        batch_status = "failed"
+        if any(pools.values()):
+            batch_error = "模型未产出有效题目，请检查运行日志和模型调用记录中的错误或校验结果。"
+        elif all(s["status"] == "failed" for s in crawl_stats):
+            batch_error = ("所有选中来源抓取失败，未获取到可用素材，未调用模型。"
+                           "请检查网络连接，在来源管理中重新核验，或更换来源后重试。")
+        else:
+            batch_error = ("未获取到可用的新素材（无有效条目或已被历史去重），未调用模型。"
+                           "请检查抓取日志，增加或更换来源后重试。")
+
     manifest = {
         "formatVersion": 1,
         "batchId": batch_id,
         "createdAt": now_iso(),
-        "status": "aborted" if aborted else "completed",
+        "status": batch_status,
+        "error": batch_error,
         "params": {"sourceIds": params.get("sourceIds", []), "riskIds": risk_ids,
                    "total": total, "zhPercent": zh_percent, "questionType": question_type,
                    "model": settings.get("model", "")},
@@ -274,7 +291,8 @@ def run_batch(params: dict, settings: dict, on_event, fetch_fn=None, generate_fn
     summary = {
         "batchId": batch_id,
         "batchDir": str(batch_dir),
-        "status": "aborted" if aborted else "completed",
+        "status": batch_status,
+        "error": batch_error,
         "questionCount": len(questions),
         "zhCount": zh_count,
         "enCount": len(questions) - zh_count,
@@ -284,6 +302,10 @@ def run_batch(params: dict, settings: dict, on_event, fetch_fn=None, generate_fn
         "xlsxPath": "" if export_error else str(xlsx_path),
         "questions": questions,
     }
-    events({"stage": "export", "level": "info",
-            "message": f"批次完成：{len(questions)} 题（中 {zh_count} / 英 {len(questions) - zh_count}）→ {batch_dir}"})
+    outcome = {"completed": "批次完成", "failed": "批次失败", "aborted": "批次中止"}[batch_status]
+    level = {"completed": "info", "failed": "error", "aborted": "warn"}[batch_status]
+    reason = f"；{batch_error}" if batch_error else ""
+    events({"stage": "export", "level": level,
+            "message": (f"{outcome}：{len(questions)} 题（中 {zh_count} / 英 {len(questions) - zh_count}）"
+                        f"{reason} → {batch_dir}")})
     return summary

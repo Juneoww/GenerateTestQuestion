@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import Mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -111,6 +112,62 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(summary["questionCount"], 0)
         # 熔断在第 3 组的第 1 次调用触发（5 连空），此前 3 组计入缺口
         self.assertEqual(len(summary["shortage"]), 3)
+
+    def test_all_crawls_fail_records_failed_batch_without_model_calls(self):
+        def fail_crawl(*args, **kwargs):
+            raise pipeline.crawler.CrawlError("列表页请求失败：curl: (35) Connection was reset")
+
+        pipeline.crawler.crawl_source = fail_crawl
+        generate = Mock(side_effect=AssertionError("没有素材时不得调用模型"))
+        summary = self.run_batch(generate_fn=generate, total=4, zh_percent=100,
+                                 question_type="image")
+        self.assertEqual(summary["status"], "failed")
+        self.assertEqual(summary["questionCount"], 0)
+        self.assertIn("来源抓取失败", summary["error"])
+        self.assertIn("未调用模型", summary["error"])
+        generate.assert_not_called()
+        batch_dir = Path(summary["batchDir"])
+        manifest = json.loads((batch_dir / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["status"], "failed")
+        self.assertEqual(manifest["error"], summary["error"])
+        self.assertEqual(manifest["generate"]["calls"], 0)
+        self.assertEqual(sum(s["target"] for s in manifest["shortage"]), 4)
+        self.assertIn("curl: (35)", manifest["crawl"]["bySource"][0]["reason"])
+        self.assertTrue((batch_dir / "questions.json").exists())
+        self.assertTrue((batch_dir / "crawl_report.md").exists())
+        self.assertEqual(self.events[-1]["level"], "error")
+        self.assertIn("批次失败", self.events[-1]["message"])
+        self.assertNotIn("批次完成", self.events[-1]["message"])
+
+    def test_empty_material_pool_explains_no_new_material(self):
+        def empty_crawl(*args, **kwargs):
+            return {**fake_crawl(*args, **kwargs), "items": [], "kept": 0, "duplicates": 2}
+
+        pipeline.crawler.crawl_source = empty_crawl
+        generate = Mock(side_effect=AssertionError("没有素材时不得调用模型"))
+        summary = self.run_batch(generate_fn=generate)
+        self.assertEqual(summary["status"], "failed")
+        self.assertIn("未获取到可用的新素材", summary["error"])
+        self.assertIn("去重", summary["error"])
+        generate.assert_not_called()
+
+    def test_zero_valid_questions_is_failed_without_hitting_circuit_breaker(self):
+        summary = self.run_batch(generate_fn=fake_generate_empty, total=2,
+                                 zh_percent=100, risk_ids=["A1-01"])
+        self.assertEqual(summary["status"], "failed")
+        self.assertIn("模型未产出有效题目", summary["error"])
+        self.assertEqual(self.events[-1]["level"], "error")
+
+    def test_one_failed_source_does_not_fail_successful_generation(self):
+        def partly_failed_crawl(source, *args, **kwargs):
+            if source["sourceId"] == "S2":
+                raise pipeline.crawler.CrawlError("列表页请求失败")
+            return fake_crawl(source, *args, **kwargs)
+
+        pipeline.crawler.crawl_source = partly_failed_crawl
+        summary = self.run_batch(total=2, zh_percent=100, risk_ids=["A1-01"])
+        self.assertEqual(summary["status"], "completed")
+        self.assertEqual(summary["questionCount"], 2)
 
     def test_shortage_when_pool_exhausted(self):
         # 每条原文只出 1 道（maxQuestionsPerItem 生效上限外的池子限制由 visited 模拟）

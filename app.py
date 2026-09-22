@@ -125,7 +125,7 @@ class DesktopApplication(tk.Tk):
     # ------------------------------------------------------------------ 生成页
     def _make_scrollable(self, parent: tk.Widget) -> ttk.Frame:
         """把一页内容包进可垂直滚动的 Canvas：内容超出一屏时出现滚动条；
-        不足一屏时把内容撑满可视高度，日志/对照区的弹性布局保持不变。"""
+        内容高度按各区块的请求高度计算，不挤压日志和对照区。"""
         outer = ttk.Frame(parent)
         outer.pack(fill="both", expand=True)
         canvas = tk.Canvas(outer, highlightthickness=0)
@@ -148,23 +148,50 @@ class DesktopApplication(tk.Tk):
         self._page_sync = sync
         self._page_inner = inner
         self._page_canvas = canvas
-        self._bind_page_wheel(canvas)
         return inner
 
     def _bind_page_wheel(self, canvas: tk.Canvas) -> None:
-        """鼠标滚轮滚动整页；焦点在自带滚动的控件（文本框/树/列表等）时让给它。"""
+        """生成页内优先滚动日志/题目/详情，到边界后将同方向滚轮交给整页。"""
+        scroll_widgets = (self.log_text, self.question_tree, self.detail_text)
 
-        def on_wheel(event) -> None:
-            if not canvas.winfo_ismapped():
+        def on_wheel(event) -> str | None:
+            if not canvas.winfo_ismapped() or event.state & 0x0001:
+                return  # Shift+滚轮保持原有横向滚动语义
+            if event.num in (4, 5):
+                units = -1 if event.num == 4 else 1
+            elif event.delta:
+                units = max(1, abs(event.delta) // 120) * (-1 if event.delta > 0 else 1)
+            else:
                 return
-            if isinstance(event.widget, (tk.Text, ttk.Treeview, tk.Listbox, ttk.Spinbox)):
-                return
+
+            widget = event.widget
+            inner_scroll = None
+            while widget is not canvas:
+                if widget is None or isinstance(widget, (tk.Toplevel, ttk.Spinbox)):
+                    return  # 不接管其他窗口、工作区或数字输入框的滚轮
+                if inner_scroll is None and isinstance(widget, (tk.Text, ttk.Treeview)):
+                    inner_scroll = widget
+                widget = widget.master
+
+            if inner_scroll is not None:
+                first, last = inner_scroll.yview()
+                if (units < 0 and first > 0.0) or (units > 0 and last < 1.0):
+                    return  # 内层还有内容，继续执行控件原生滚动绑定
             first, last = canvas.yview()
-            if first <= 0.0 and last >= 1.0:
-                return  # 整页放得下，无需滚动
-            canvas.yview_scroll(-1 * (event.delta // 120), "units")
+            if (units < 0 and first <= 0.0) or (units > 0 and last >= 1.0):
+                return
+            canvas.yview_scroll(units, "units")
+            return "break"
 
-        canvas.bind_all("<MouseWheel>", on_wheel, add=True)
+        def on_page_wheel(event) -> str | None:
+            # 内层已在原生类绑定之前检查边界，不能在 bind_all 阶段再滚一次页面。
+            if event.widget not in scroll_widgets:
+                return on_wheel(event)
+
+        for sequence in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            canvas.bind_all(sequence, on_page_wheel, add=True)
+            for widget in scroll_widgets:
+                widget.bind(sequence, on_wheel, add=True)
 
     def _build_generate_tab(self) -> None:
         page = self._make_scrollable(self.generate_tab)
@@ -236,24 +263,26 @@ class DesktopApplication(tk.Tk):
         self._generate_widgets = [total_spin, zh_spin, self.text_mode_radio,
                                   self.image_mode_radio, self.start_button]
 
-        split = ttk.PanedWindow(page, orient=VERTICAL)
-        split.pack(fill="both", expand=True, pady=(8, 0))
-
-        log_frame = ttk.LabelFrame(split, text="4. 运行日志", style="Card.TLabelframe")
-        self.log_text = tk.Text(log_frame, height=5, wrap="word", font=(FONT, 9), state="disabled")
+        # 两个区块各自保留阅读高度，让外层 Canvas 承担页面溢出，不再靠拖分隔条分配空间。
+        log_frame = ttk.LabelFrame(page, text="4. 运行日志", style="Card.TLabelframe")
+        log_frame.pack(fill=X, pady=(8, 0))
+        self.log_text = tk.Text(log_frame, height=8, wrap="word", font=(FONT, 9), state="disabled")
         log_scroll = ttk.Scrollbar(log_frame, orient=VERTICAL, command=self.log_text.yview)
         self.log_text.configure(yscrollcommand=log_scroll.set)
         self.log_text.pack(side=LEFT, fill="both", expand=True)
         log_scroll.pack(side=RIGHT, fill=Y)
         self.log_text.tag_configure("warn", foreground="#8a6d00")
         self.log_text.tag_configure("error", foreground="#a4262c")
-        split.add(log_frame, weight=1)
 
-        compare = ttk.LabelFrame(split, text="5. 原文 ↔ 题目对照", style="Card.TLabelframe")
-        paned = ttk.PanedWindow(compare, orient=HORIZONTAL)
+        compare = ttk.LabelFrame(page, text="5. 原文 ↔ 题目对照", style="Card.TLabelframe")
+        compare.pack(fill=X, pady=(8, 0))
+        paned = ttk.PanedWindow(compare, orient=HORIZONTAL, height=360)
         paned.pack(fill="both", expand=True)
-        left = ttk.Frame(paned)
-        right = ttk.Frame(paned)
+        left = ttk.Frame(paned, width=480)
+        right = ttk.Frame(paned, width=720)
+        # 保持初始 2:3 阅读宽度，避免题干的 1200 像素长列把右侧原文挤出可视区。
+        left.pack_propagate(False)
+        right.pack_propagate(False)
         paned.add(left, weight=2)
         paned.add(right, weight=3)
         self.question_tree = ttk.Treeview(left, columns=("seq", "risk", "digest"), show="headings", height=9)
@@ -274,7 +303,6 @@ class DesktopApplication(tk.Tk):
         self.detail_text.configure(yscrollcommand=detail_scroll.set)
         self.detail_text.pack(side=LEFT, fill="both", expand=True)
         detail_scroll.pack(side=RIGHT, fill=Y)
-        split.add(compare, weight=3)
 
         actions = ttk.Frame(page)
         actions.pack(fill=X, pady=(6, 0))
@@ -288,6 +316,7 @@ class DesktopApplication(tk.Tk):
         ttk.Button(actions, text="打开来源网页",
                    command=self._open_question_url).pack(side=RIGHT)
         self.bind("<Control-l>", lambda _event: self._load_history_batch())
+        self._bind_page_wheel(self._page_canvas)
 
     def _refresh_selection_catalog(self) -> None:
         scenes = storage.load_catalog()
@@ -560,10 +589,21 @@ class DesktopApplication(tk.Tk):
         self.current_batch_dir = summary.get("batchDir", "")
         self.current_xlsx = summary.get("xlsxPath", "")
         self.open_batch_button.state(["!disabled"])
-        self.open_xlsx_button.state(["!disabled"] if self.current_xlsx else ["disabled"])
+        self.open_xlsx_button.state(["!disabled"] if self.current_xlsx and self.current_questions else ["disabled"])
         self._populate_question_tree()
-        self._set_status(f"批次 {summary['batchId']} 完成：{summary['questionCount']} 题"
+        batch_status = summary.get("status", "completed")
+        outcome = {"completed": "完成", "failed": "失败", "aborted": "已中止"}.get(batch_status, "完成")
+        self._set_status(f"批次 {summary['batchId']} {outcome}：{summary['questionCount']} 题"
                          f"（中 {summary['zhCount']} / 英 {summary['enCount']}）")
+        if batch_status == "failed":
+            messagebox.showerror("生成失败", f"{summary.get('error') or '本批次未生成有效题目。'}\n\n"
+                                 f"批次与日志已保留：{self.current_batch_dir}", parent=self)
+            return
+        if batch_status == "aborted":
+            messagebox.showwarning("生成已中止", f"{summary.get('error') or '批次已中止。'}\n"
+                                   f"已保留 {summary['questionCount']} 题。\n"
+                                   f"批次与日志：{self.current_batch_dir}", parent=self)
+            return
         shortage = summary.get("shortage", [])
         note = f"，缺口 {len(shortage)} 项" if shortage else ""
         messagebox.showinfo("生成完成",
@@ -573,6 +613,10 @@ class DesktopApplication(tk.Tk):
 
     def _populate_question_tree(self) -> None:
         self.question_tree.delete(*self.question_tree.get_children())
+        # 空批次也必须清掉旧原文，避免把上次结果误当成本次产出。
+        self.detail_text.configure(state="normal")
+        self.detail_text.delete("1.0", END)
+        self.detail_text.configure(state="disabled")
         for q in self.current_questions:
             self.question_tree.insert("", END, iid=str(q["seq"]), values=(
                 q["seq"], q["riskId"], q["question"]))
@@ -617,7 +661,7 @@ class DesktopApplication(tk.Tk):
             xlsx = batch_dir / "questions.xlsx"
             self.current_xlsx = str(xlsx) if xlsx.exists() else ""
             self.open_batch_button.state(["!disabled"])
-            self.open_xlsx_button.state(["!disabled"] if self.current_xlsx else ["disabled"])
+            self.open_xlsx_button.state(["!disabled"] if self.current_xlsx and self.current_questions else ["disabled"])
             self._populate_question_tree()
             dialog.destroy()
             self._set_status(f"已加载历史批次 {batch_dir.name}：{len(self.current_questions)} 题")
