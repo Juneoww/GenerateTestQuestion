@@ -1,5 +1,7 @@
 # 图片生成题模式改造 v2.0.0——设计与实施计划
 
+> **For agentic workers:** 按下列复选清单逐项执行；新增生产行为必须先写会因该行为缺失而失败的测试。工作区已有的未提交图片题改动视为用户提供的基线，先用表征测试和代码审阅核实，不为形式化 TDD 擅自删除它们。
+
 - **日期**：2026-09-21
 - **分支**：`feat/image-questions`（已自 main `0aeaece` 切出）
 - **定位**：回答"怎么改、怎么验收、怎么发布"——新增"图片生成题"模式的分文件改动、参数流、提示词、测试计划、实施阶段与 v2.0.0 发布清单。本文件同时作为本次改造的实施计划，避免与既有设计重复维护。
@@ -111,3 +113,172 @@
 - **英文图片提示词**：文生图模型普遍对英文提示词效果更好，现有"中文占比"参数即可设为 0 全量出英文题，无需新功能
 - **模式污染**：若某层把未知模式默认为文本而另一层仍把元数据写成未知值，会制造不可追溯的混合批次；用单一规范化函数、创建目录前校验和回归测试消除该风险。
 - **发布环境差异**：PyInstaller 打包的 exe 可能与源码环境表现不同，因此 v2.0.0 的发布门槛包含源码与成品两次烟测，以及 Windows 文件版本核验。
+
+## 7. 可执行开发与发布清单
+
+### Task 1：锁定用户提供的图片模式基线
+
+**Files:**
+- Review: `question_generator.py`, `pipeline.py`, `excel_export.py`, `storage.py`, `app.py`
+- Review: `tests/test_generator.py`, `tests/test_pipeline.py`, `tests/test_storage.py`
+
+- [ ] **Step 1：确认基线只包含本功能相关文件**
+
+Run: `git status --short` and `git diff --check`.
+
+Expected: 记录已有未提交图片模式改动；不暂存、覆盖或回退无关用户改动。
+
+- [ ] **Step 2：运行已有图片模式表征测试**
+
+Run: `.\\.venv\\Scripts\\python.exe -m unittest discover -s tests -p test_generator.py -v` and `.\\.venv\\Scripts\\python.exe -m unittest discover -s tests -p test_pipeline.py -v`.
+
+Expected: 已有 image/text 默认行为、批次 `-IMG` 后缀、JSON/manifest/调用留痕的测试作为基线通过；若失败，先用失败输出定位，不凭假设改实现。
+
+### Task 2：为题目模式建立严格的单一校验入口
+
+**Files:**
+- Modify: `question_generator.py`
+- Modify: `pipeline.py`
+- Test: `tests/test_generator.py`
+- Test: `tests/test_pipeline.py`
+
+- [ ] **Step 1：先写失败测试（RED）**
+
+在 `tests/test_generator.py` 断言 `build_prompts(..., question_type="unknown")` 和 `generate_questions(..., question_type="unknown")` 抛出含“题目形式”上下文的 `ValueError`；在 `tests/test_pipeline.py` 调用 `run_batch` 传 `questionType="unknown"`，断言抛错且测试输出根目录没有新批次目录。
+
+- [ ] **Step 2：确认失败原因正确**
+
+Run: `.\\.venv\\Scripts\\python.exe -m unittest discover -s tests -p test_generator.py -v` and `.\\.venv\\Scripts\\python.exe -m unittest discover -s tests -p test_pipeline.py -v`.
+
+Expected: 新用例因当前对未知值静默按文本提示词处理而失败，而不是测试夹具或目录权限错误。
+
+- [ ] **Step 3：实施最小规范化函数（GREEN）**
+
+在 `question_generator.py` 新增唯一的 `normalize_question_type(value)`，只接受 `text`、`image`；让 `build_prompts` 与 `generate_questions` 使用它。`pipeline.run_batch()` 在计算批次 ID 或创建目录前调用同一函数，后续只透传规范化后的值。
+
+- [ ] **Step 4：重跑针对性测试及全量测试**
+
+Run: `.\\.venv\\Scripts\\python.exe -m unittest discover -s tests -v`.
+
+Expected: 所有离线测试通过；默认不传模式保持文本题兼容，非法模式既不请求模型也不创建批次目录。
+
+- [ ] **Step 5：提交可独立审阅的后端增量**
+
+Run: `git add question_generator.py pipeline.py tests/test_generator.py tests/test_pipeline.py` then `git commit -m "feat: validate image question mode"`.
+
+### Task 3：验证设置与 Excel 的向后兼容交付格式
+
+**Files:**
+- Modify: `storage.py`（如测试发现需要）
+- Modify: `excel_export.py`（如测试发现需要）
+- Modify: `tests/test_storage.py`
+- Create: `tests/test_excel_export.py`
+
+- [ ] **Step 1：为现有用户基线补表征测试**
+
+在 `tests/test_storage.py` 覆盖缺失、`text`、`image` 与非法 `questionType` 的加载/保存结果；创建 `tests/test_excel_export.py`，用临时 xlsx 断言第 3 列标题为“题型”，`image`、`text`、缺字段分别为“图片”“文本”“文本”，且第 10 列原文摘录保持自动换行。
+
+- [ ] **Step 2：运行新测试并只修复真实缺口**
+
+Run: `.\\.venv\\Scripts\\python.exe -m unittest discover -s tests -p test_storage.py -v` and `.\\.venv\\Scripts\\python.exe -m unittest discover -s tests -p test_excel_export.py -v`.
+
+Expected: 旧 settings 与旧题目数据不需要迁移即可得到“文本”；Excel 的列宽、冻结首行与原文摘录列索引均正确。
+
+- [ ] **Step 3：做最小修复并回归**
+
+若测试暴露缺口，只调整 `storage.py` / `excel_export.py` 的相关逻辑；随后运行全量离线测试。
+
+- [ ] **Step 4：提交交付格式增量**
+
+Run: `git add storage.py excel_export.py tests/test_storage.py tests/test_excel_export.py` then `git commit -m "feat: export image question type"`.
+
+### Task 4：完成桌面端模式选择和历史回看
+
+**Files:**
+- Modify: `app.py`
+- Modify: `tests/_ui_logic_check.py`
+- Manual QA: `docs/prototype-image-mode.html`
+
+- [ ] **Step 1：为历史默认值补离屏 UI 检查**
+
+扩展 `tests/_ui_logic_check.py`：验证两个单选控件存在、切换到 image 时汇总/就绪提示包含“图片生成题”与 `-IMG`，以及缺失 `questionType` 的历史题在详情中显示“文本对话题”。
+
+- [ ] **Step 2：运行检查并确认失败指向缺失行为**
+
+Run: `.\\.venv\\Scripts\\python.exe tests\\_ui_logic_check.py`.
+
+Expected: 当前实现的“旧批次不显示题型”检查会失败，证明新检查覆盖了 v2.0.0 的历史兼容要求。
+
+- [ ] **Step 3：实施最小 UI 修复**
+
+在 `app.py` 统一将详情的缺失 `questionType` 视作 `text`，始终显示【题型】；保留运行期间禁用两个单选控件、保存上次选择、以及向 pipeline 传递批次参数的现有实现。
+
+- [ ] **Step 4：验证桌面端与原型语义一致**
+
+Run: `.\\.venv\\Scripts\\python.exe tests\\_ui_logic_check.py` and `.\\.venv\\Scripts\\python.exe app.py --smoke-test`.
+
+Expected: 离屏检查通过；烟测 JSON 的 `version` 在版本任务完成后为 `2.0.0`。人工打开程序核对：模式位于第 3 步、切换不影响风险小类、生成中不可修改。
+
+- [ ] **Step 5：提交桌面端增量**
+
+Run: `git add app.py tests/_ui_logic_check.py` then `git commit -m "feat: show image question mode in desktop app"`.
+
+### Task 5：同步用户文档、变更日志与版本号
+
+**Files:**
+- Modify: `README.md`
+- Modify: `docs/使用说明.md`
+- Modify: `storage.py`
+- Create: `CHANGELOG.md`
+- Modify: `docs/2026-09-21-image-question-mode-design.md`
+
+- [ ] **Step 1：更新版本和用户可见契约**
+
+将 `storage.APP_VERSION` 设为 `2.0.0`；在 README 与使用说明明确第 3 步的模式选择、`-IMG` 批次后缀、详情【题型】、JSON 的 `questionType`、Excel 共 13 列及旧批次默认文本。
+
+- [ ] **Step 2：写 v2.0.0 迁移说明**
+
+创建 `CHANGELOG.md`，记录图片生成题、兼容策略、Excel“题型”列插入位置，以及外部脚本应按列名读取的迁移建议。首次引入变更日志时，该文件的 v2.0.0 节即为 GitHub Release 的 `--notes-file` 内容。
+
+- [ ] **Step 3：验证版本传播**
+
+Run: `.\\.venv\\Scripts\\python.exe app.py --smoke-test`.
+
+Expected: JSON 的 `version` 精确为 `2.0.0`。
+
+- [ ] **Step 4：提交文档与版本增量**
+
+Run: `git add README.md docs/使用说明.md storage.py CHANGELOG.md docs/2026-09-21-image-question-mode-design.md` then `git commit -m "chore(release): prepare v2.0.0"`.
+
+### Task 6：发布前验证、Windows 打包与 GitHub Release
+
+**Files:**
+- Generated (not tracked): `dist/GenerateTestQuestion.exe`, `dist/GenerateTestQuestion.exe.sha256`
+
+- [ ] **Step 1：做完整源码验证**
+
+Run: `.\\.venv\\Scripts\\python.exe -m unittest discover -s tests -v`, `.\\.venv\\Scripts\\python.exe app.py --smoke-test`, and `git diff --check`.
+
+Expected: 全部离线测试通过、源码烟测版本为 `2.0.0`、没有空白/冲突错误。
+
+- [ ] **Step 2：在用户授权的模型配置存在时做小批量人工验收**
+
+仅在用户确认可使用本机 API 配置时，生成约 10 道图片题；人工确认它们是文生图画面指令而非文本问句，并核对 `-IMG`、JSON、manifest、Excel 与 `llm_calls.jsonl` 的 `questionType=image` 一致。
+
+- [ ] **Step 3：打包并验证成品 exe**
+
+Run: `cmd /c build_exe.bat`, `.\\dist\\GenerateTestQuestion.exe --smoke-test`, then `$releaseHash = (Get-FileHash .\\dist\\GenerateTestQuestion.exe -Algorithm SHA256).Hash.ToLowerInvariant()` and `Set-Content -Encoding ascii -NoNewline .\\dist\\GenerateTestQuestion.exe.sha256 "$releaseHash *GenerateTestQuestion.exe"`.
+
+Expected: 打包成功；成品烟测通过且 `version=2.0.0`；明确生成标准单行校验文件 `dist/GenerateTestQuestion.exe.sha256`，以附到 Release。
+
+- [ ] **Step 4：检查发布前 Git 状态与远程 tag 冲突**
+
+Run: `git status --short`, `git log --oneline origin/main..HEAD`, and `git ls-remote --tags origin v2.0.0`.
+
+Expected: 仅包含本版本相关提交，且远程不存在冲突的 `v2.0.0` tag。
+
+- [ ] **Step 5：推送、打 tag 并创建 Release**
+
+Run: `git push origin feat/image-questions`, `git tag -a v2.0.0 -m "GenerateTestQuestion v2.0.0"`, `git push origin v2.0.0`, then `gh release create v2.0.0 .\\dist\\GenerateTestQuestion.exe .\\dist\\GenerateTestQuestion.exe.sha256 --title "v2.0.0" --notes-file CHANGELOG.md`.
+
+Expected: GitHub Release 指向经验证的 tag，附件包含 exe 与 SHA-256；发布说明包含图片生成题、新增“题型”列和兼容提示。
