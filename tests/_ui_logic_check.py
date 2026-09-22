@@ -28,6 +28,18 @@ check("站点徽章 0/16", a.site_badge.cget("text") == "已选 0/16")
 check("小类徽章 31/31", a.risk_badge.cget("text") == "已选 31/31")
 check("初始禁用(未选站点)", a.start_button.instate(["disabled"]))
 
+# 题目形式：两个标准 ttk 单选都存在；图片模式同步更新摘要与就绪提示。
+check("文本题单选存在", hasattr(a, "text_mode_radio") and a.text_mode_radio.winfo_exists())
+check("图片题单选存在", hasattr(a, "image_mode_radio") and a.image_mode_radio.winfo_exists())
+a.site_vars["PIAO-ZH"].set(True)
+a.question_type_var.set("image")
+a._update_selection_summary()
+a.update()
+check("图片模式摘要", "图片生成题" in a.selection_summary.cget("text"))
+check("图片模式就绪提示含 -IMG", "-IMG" in a.go_hint.cget("text"))
+a.question_type_var.set("text")
+a._select_sites(None, False)  # 恢复全不选，供后续用例使用
+
 # 站点分组折叠：默认收起，展开后挂载，分组徽章随选择联动
 check("站点组默认收起", all(not w["expanded"] for w in a.site_group_widgets.values()))
 a._toggle_site_group("zh")
@@ -75,6 +87,7 @@ a.current_questions = [{"seq": 1, "riskId": "A1-01", "sceneCode": "A.1", "catego
 a._populate_question_tree()
 stored = a.question_tree.item("1", "values")[2]
 check("题干全文入库不截断", stored == "长" * 120)
+check("历史文本题详情显示题型", "【题型】文本对话题" in a.detail_text.get("1.0", "end-1c"))
 check("来源表接横向滚动", bool(a.source_tree.cget("xscrollcommand")))
 check("日志框接纵向滚动", bool(a.log_text.cget("yscrollcommand")))
 

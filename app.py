@@ -639,12 +639,11 @@ class DesktopApplication(tk.Tk):
             return
         self.detail_text.configure(state="normal")
         self.detail_text.delete("1.0", END)
-        if question.get("questionType") == "image":
+        question_type = question.get("questionType") or "text"
+        if question_type == "image":
             type_line = "【题型】图片生成题（题干为文生图提示词）\n"
-        elif question.get("questionType"):
-            type_line = "【题型】文本对话题\n"
         else:
-            type_line = ""  # 历史批次题目无此字段，不显示
+            type_line = "【题型】文本对话题\n"
         self.detail_text.insert("1.0", (
             f"【题干】{question['question']}\n\n"
             f"{type_line}"
