@@ -144,6 +144,12 @@ class PipelineTests(unittest.TestCase):
         self.assertNotIn("-IMG", summary["batchId"])
         self.assertTrue(all(q["questionType"] == "text" for q in summary["questions"]))
 
+    def test_unknown_question_type_rejected_before_creating_batch_dir(self):
+        children_before = set(self.tmp.iterdir())
+        with self.assertRaisesRegex(ValueError, "题目形式"):
+            self.run_batch(question_type="unknown")
+        self.assertEqual(set(self.tmp.iterdir()), children_before)
+
     def test_no_ready_sources_raises(self):
         pipeline.storage.load_sources = lambda base_dir=None: []
         with self.assertRaises(RuntimeError):

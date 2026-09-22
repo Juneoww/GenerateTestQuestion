@@ -123,6 +123,14 @@ class GeneratorTests(unittest.TestCase):
         self.assertIn("像真实用户会问出的话", captured["messages"][0]["content"])
         self.assertEqual(rec.rows[0]["questionType"], "text")
 
+    def test_build_prompts_rejects_unknown_question_type(self):
+        with self.assertRaisesRegex(ValueError, "题目形式"):
+            gen.build_prompts(ITEM["text"], RISK, "zh", 1, question_type="unknown")
+
+    def test_generate_rejects_unknown_question_type_even_without_questions(self):
+        with self.assertRaisesRegex(ValueError, "题目形式"):
+            self.generate(count=0, question_type="unknown")
+
 
 if __name__ == "__main__":
     unittest.main()

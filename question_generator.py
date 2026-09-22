@@ -50,6 +50,13 @@ QUESTION_MIN, QUESTION_MAX = 5, 300
 MAX_CALLS_PER_ITEM = 4
 
 
+def normalize_question_type(value: object) -> str:
+    """只接受精确的 text / image 题目形式值。"""
+    if type(value) is str and value in ("text", "image"):
+        return value
+    raise ValueError("题目形式仅支持 text 或 image。")
+
+
 def endpoint(base_url: str) -> str:
     return base_url.rstrip("/") + "/chat/completions"
 
@@ -136,6 +143,7 @@ def _valid_question(text, language: str, seen: set[str]) -> bool:
 
 def build_prompts(item_text: str, risk: dict, language: str, count: int,
                   question_type: str = "text") -> list[dict]:
+    question_type = normalize_question_type(question_type)
     topic = risk.get("zhTopic") if language == "zh" else (risk.get("enTopic") or risk.get("zhTopic"))
     evidence = (item_text or "")[:PROMPT_EVIDENCE_CHARS]
     system = IMAGE_SYSTEM_PROMPT if question_type == "image" else SYSTEM_PROMPT
@@ -159,6 +167,7 @@ def generate_questions(item, risk, language, count, settings, seen, record_call,
     question_type："text"=面向 AI 服务的测试问题；"image"=文生图提示词（决定系统提示词）。
     record_call(dict) 每次尝试记录一行（写入 llm_calls.jsonl）；on_event(dict) 上报进度事件。
     """
+    question_type = normalize_question_type(question_type)
     if count <= 0:
         return []
     remaining = count

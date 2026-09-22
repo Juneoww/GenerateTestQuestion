@@ -97,7 +97,7 @@ def _save_hash_index(index_path: Path, index: dict) -> None:
 
 def run_batch(params: dict, settings: dict, on_event, fetch_fn=None, generate_fn=None) -> dict:
     started = time.perf_counter()
-    question_type = str(params.get("questionType") or "text")
+    question_type = generator.normalize_question_type(params.get("questionType", "text"))
     batch_id = (f"BATCH-{datetime.now():%Y%m%d-%H%M%S}"
                 + ("-IMG" if question_type == "image" else ""))
     output_root = resolve_output_dir(settings)
