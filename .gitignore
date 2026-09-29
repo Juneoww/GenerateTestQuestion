@@ -13,6 +13,8 @@ data/corpus/
 # 会话/工具记忆
 .workbuddy/
 .worktrees/
+.understand-anything/
+.zcode/
 
 # 测试临时目录
 tests/.tmp_*/

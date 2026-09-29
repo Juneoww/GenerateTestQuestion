@@ -61,7 +61,8 @@ def endpoint(base_url: str) -> str:
     return base_url.rstrip("/") + "/chat/completions"
 
 
-def _chat(settings: dict, messages: list[dict]) -> str:
+def chat_completion(settings: dict, messages: list[dict]) -> str:
+    """调用 OpenAI 兼容的聊天补全接口并返回回复正文。"""
     payload = {
         "model": settings["model"],
         "messages": messages,
@@ -92,6 +93,11 @@ def _chat(settings: dict, messages: list[dict]) -> str:
         raise RuntimeError(f"模型接口响应格式异常：{json.dumps(body, ensure_ascii=False)[:300]}") from error
 
 
+def _chat(settings: dict, messages: list[dict]) -> str:
+    """保留旧入口，供现有出题流程和测试替换调用。"""
+    return chat_completion(settings, messages)
+
+
 def test_connection(settings: dict) -> str:
     content = _chat(settings, [{"role": "user", "content": "请只回复两个字：正常"}])
     return content.strip()[:50]
@@ -109,7 +115,8 @@ def question_hash(text: str) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
 
 
-def _parse_array(content: str) -> list:
+def parse_json_array(content: str) -> list:
+    """从回复中提取 JSON 数组，容忍 Markdown 代码围栏。"""
     text = re.sub(r"```(?:json)?|```", "", content or "").strip()
     start, end = text.find("["), text.rfind("]")
     if start < 0 or end <= start:
@@ -118,6 +125,11 @@ def _parse_array(content: str) -> list:
     if not isinstance(data, list):
         raise ValueError("JSON 顶层不是数组")
     return data
+
+
+def _parse_array(content: str) -> list:
+    """保留旧入口，供现有出题流程调用。"""
+    return parse_json_array(content)
 
 
 def _valid_question(text, language: str, seen: set[str]) -> bool:

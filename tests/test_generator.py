@@ -61,6 +61,14 @@ class GeneratorTests(unittest.TestCase):
         out, _ = self.generate()
         self.assertEqual(len(out), 1)
 
+    def test_parse_json_array_public_entry_keeps_code_fence_tolerance(self):
+        self.assertTrue(hasattr(gen, "parse_json_array"))
+        self.assertEqual(
+            gen.parse_json_array('```json\n[{"question": "测试"}]\n```'),
+            [{"question": "测试"}],
+        )
+        self.assertTrue(callable(getattr(gen, "chat_completion", None)))
+
     def test_invalid_json_retries(self):
         self.fake_chat("不是 JSON 的回复")
         out, rec = self.generate(count=2)
