@@ -80,10 +80,10 @@ OWASP 模型输出会经过六字段、风险归属、语言、跨会话镜像�
 
 ## 免安装版（Windows exe）
 
-本轮 v3.0.0 OWASP 模型生成更新以当前源码通过 `run.bat` 运行的功能为准；已有 Releases 中的 exe 不会自动更新，只有重新打包并发布的 exe 才包含本轮改动。
+v3.0.0 同时提供源码和重新打包的 Windows 界面程序；请下载对应版本的 exe，旧版 exe 不会自动获得 OWASP 功能。
 
 不想装 Python 也可以直接用打包好的单文件程序：到
-[Releases](https://github.com/Juneoww/GenerateTestQuestion/releases)
+[v3.0.0 Release](https://github.com/Juneoww/GenerateTestQuestion/releases/tag/v3.0.0)
 下载 `GenerateTestQuestion.exe`（约 60 MB），放到任意**可写**目录（如桌面、D 盘某文件夹）双击运行。
 
 - 首次运行会在 exe 旁边生成 `data/` 目录（内置 16 个来源站点与 TC260 风险目录）。

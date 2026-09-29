@@ -157,3 +157,13 @@
 - 测试先行观察到标题、授权门禁、独立日志、Excel 按钮及最小窗口可视性均按预期失败；实现后 OWASP 定向 20 项、OWASP+TC260 滚动 32 项通过。额外几何检查：默认/最小窗口结果树均为 351 像素，整页滚动能到达底部动作。
 - 复审发现设置页路径提示只写 TC260 `BATCH-…`，已补失败测试并改为同时说明 `OWASP-…`；现待最终全量回归。
 - 最终全量回归：`unittest discover -s tests` **162/162** 通过；`compileall`、`app.py --smoke-test`、`git diff --check` 均退出 0。定向复审确认默认与最小窗口均可滚动访问结果／文件按钮，TC260 与 OWASP 滚轮互不影响。仍建议用户在桌面运行 `run.bat` 做可视点击验收。
+
+### v3.0.0 GitHub 发布
+
+- 用户要求将本轮修改按 v3.0.0 上传 GitHub，并一同提供 Windows 界面程序。
+- 已核对 GitHub 远端 `main` 仍为 v2.0.0 对应提交，尚无 v3.0.0 标签或 Release；本地 `main` 领先 5 个提交。
+- 现有 `dist/GenerateTestQuestion.exe` 创建于 2026-09-22，是旧版产物，发布前必须重新构建。v2.0.0 Release 使用 exe 和 `.sha256` 两项资产，本轮沿用。
+- 源码回归 162/162 通过，编译与 `app.py --smoke-test` 成功；重新构建的 exe 为 62,797,159 字节，文件/产品版本均为 3.0.0。打包后 `--smoke-test` 返回 v3.0.0 与 OWASP 工作区信息，隐藏启动 10 秒后 GUI 子进程仍在运行并已结束测试进程。
+- 新 exe SHA-256 为 `37540329C7ED22BCC2E68B7B222DEE3AE841E86B037E867F3FE051B092AC7E00`，与 `.sha256` 旁车文件一致。
+- 远端 `main` SHA 与本地 `origin/main` 一致；`settings.json`、`data/output` 未受 Git 跟踪，exe 与 SHA-256 文件受 `dist/` 忽略规则保护，只会作为 Release 资产上传。
+- 待执行：提交发版说明、推送、创建 Release 和远端复核。
