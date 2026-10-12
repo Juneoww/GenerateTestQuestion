@@ -80,16 +80,16 @@ OWASP 模型输出会经过六字段、风险归属、语言、跨会话镜像�
 
 ## 免安装版（Windows exe）
 
-v3.0.0 同时提供源码和重新打包的 Windows 界面程序；请下载对应版本的 exe，旧版 exe 不会自动获得 OWASP 功能。
+v3.0.1 同时提供源码和重新打包的 Windows 界面程序；该补丁修复 v3.0.0 EXE 在 TC260 爬取时缺少指纹数据文件的问题，建议使用新版 EXE。旧版 exe 不会自动获得 OWASP 功能。
 
 不想装 Python 也可以直接用打包好的单文件程序：到
-[v3.0.0 Release](https://github.com/Juneoww/GenerateTestQuestion/releases/tag/v3.0.0)
+[v3.0.1 Release](https://github.com/Juneoww/GenerateTestQuestion/releases/tag/v3.0.1)
 下载 `GenerateTestQuestion.exe`（约 60 MB），放到任意**可写**目录（如桌面、D 盘某文件夹）双击运行。
 
 - 首次运行会在 exe 旁边生成 `data/` 目录（内置 16 个来源站点与 TC260 风险目录）。
 - 到「设置」页填入模型接口地址与 API Key，「测试连接」通过后保存即可开始生成。
 - 升级：下载新版 exe 覆盖旧文件即可，`data/`（已保存的设置与历史批次）不受影响。
-- 命令行自检：`GenerateTestQuestion.exe --smoke-test`，输出 JSON 即为正常。
+- 命令行自检：`GenerateTestQuestion.exe --smoke-test` 退出码为 0 即为正常；无控制台 EXE 不保证能看到 JSON 标准输出。v3.0.1 起自检也会检查爬虫依赖数据文件。
 - SmartScreen 首次可能提示"未知发布者"，点「更多信息 → 仍要运行」。
 
 自行打包：配好虚拟环境后运行 `build_exe.bat`（PyInstaller 单文件模式），产物在 `dist/`。

@@ -1411,7 +1411,21 @@ class DesktopApplication(tk.Tk):
 
 
 def smoke_test() -> dict:
-    """不创建 Tk 窗口，供自动测试确认数据桥与目录完整性。"""
+    """不创建 Tk 窗口，确认目录与冻结程序的爬虫依赖资源完整。"""
+    import apify_fingerprint_datapoints as fingerprint_data
+
+    # BrowserForge 在真正爬取时才读取这些文件，发布前先在烟测中发现遗漏。
+    crawler_data = (
+        fingerprint_data.get_browser_helper_file(),
+        fingerprint_data.get_header_network(),
+        fingerprint_data.get_headers_order(),
+        fingerprint_data.get_input_network(),
+        fingerprint_data.get_fingerprint_network(),
+    )
+    missing = [path.name for path in crawler_data if not path.is_file()]
+    if missing:
+        raise FileNotFoundError(f"爬虫依赖资源缺失：{', '.join(missing)}")
+
     scenes = storage.load_catalog()
     risks = storage.catalog_risks(scenes)
     sources = storage.load_sources()
@@ -1433,7 +1447,13 @@ def main() -> None:
     if "--smoke-test" in sys.argv:
         if hasattr(sys.stdout, "reconfigure"):
             sys.stdout.reconfigure(encoding="utf-8")
-        print(json.dumps(smoke_test(), ensure_ascii=False))
+        try:
+            result = smoke_test()
+        except FileNotFoundError as error:
+            if sys.stderr is not None:
+                print(error, file=sys.stderr)
+            raise SystemExit(1) from None
+        print(json.dumps(result, ensure_ascii=False))
         return
     application = DesktopApplication()
     application.mainloop()

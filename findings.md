@@ -154,3 +154,9 @@ S12 是本轮唯一达到 V3 的来源，但其“可用范围”严格限于数
 - OWASP 页现有「打开 Excel」位于结果表之后的底部动作栏，长表格可能让按钮落到视野外；调整到结果区顶部并改为与 TC260 相同的「打开题库 Excel」。
 - 默认 1280×900 窗口下，直接在固定 Notebook 内加入 6 行 OWASP 日志会把结果树压到 49 像素，底部动作栏完全不可见；最小 1020×720 更严重。已按 TC260 模式加入独立整页 Canvas，在这两种尺寸下结果树保持 351 像素，底部动作可滚动到达。
 - 设置页的产物路径帮助文字原本只写 `BATCH-…`，现需同时说明 TC260 的 `BATCH-…` 和 OWASP 的 `OWASP-…`，避免用户找错目录。
+
+## 2026-10-12：v3.0.0 发布包的 TC260 启动失败
+
+- 用户截图中的缺失文件由 `browserforge.headers.generator.HeaderGenerator` 读取，实际位于依赖包 `apify_fingerprint_datapoints/data/input-network-definition.zip`；源码虚拟环境中存在，v3.0.0 单文件归档中不存在。原 spec 仅对 Scrapling 使用 `collect_all`，未显式收集该传递依赖的数据。
+- `apify_fingerprint_datapoints` 共提供五个运行时数据文件，PyInstaller `collect_data_files` 能将其全部映射到包内原路径。只检查源码烟测无法发现冻结包遗漏，因此 `--smoke-test` 必须在最终 EXE 上运行。
+- PyInstaller `console=False` 时，标准输出不一定可见；缺资源时用退出码 1 检测，避免未处理异常带来的窗口化报错框。发布前除退出码外，还需核对归档资源、文件版本、哈希与 GUI 启动。
