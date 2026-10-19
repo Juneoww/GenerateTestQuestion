@@ -22,6 +22,7 @@ import question_generator
 import storage
 from owasp_catalog import AGENTIC_FRAMEWORK, CATALOG_VERSION, LLM_FRAMEWORK, catalog_for, framework_config
 from owasp_environment import write_environment_files
+from owasp_prompt_guidance import AGENTIC_PROMPT_POLICY_VERSION
 from owasp_export import export_prompt_xlsx
 from owasp_prompt_generator import (
     _canonical_risk_ids,
@@ -154,6 +155,7 @@ def _build_manifest(batch_id: str, created_at: datetime, params: dict, model: st
         "artifactKind": "owaspPromptSet",
         "framework": params.get("framework", LLM_FRAMEWORK),
         "catalogVersion": CATALOG_VERSION,
+        "promptPolicyVersion": AGENTIC_PROMPT_POLICY_VERSION if params.get("framework") == AGENTIC_FRAMEWORK else "llm-v3",
         "batchId": batch_id,
         "createdAt": created_at.isoformat(),
         "status": status,

@@ -12,6 +12,7 @@ from pathlib import Path
 
 from owasp_catalog import AGENTIC_FRAMEWORK, AGENTIC_RISKS, CATALOG_VERSION, SOURCE_URL
 from owasp_prompt_generator import validate_prompt_records
+from owasp_prompt_guidance import AGENTIC_PROMPT_POLICY_VERSION
 
 
 def build_environment(records: list[dict[str, str]]) -> dict:
@@ -31,7 +32,8 @@ def build_environment(records: list[dict[str, str]]) -> dict:
                         "promptSha256": hashlib.sha256(record["prompt"].encode("utf-8")).hexdigest(),
                         **copy.deepcopy(risk["environment"])})
     return {"schemaVersion": "1.0", "framework": AGENTIC_FRAMEWORK, "catalogVersion": CATALOG_VERSION,
-            "mode": "model-generated", "environmentSource": "catalog-profile", "sourceUrl": SOURCE_URL,
+            "mode": "model-generated", "promptPolicyVersion": AGENTIC_PROMPT_POLICY_VERSION,
+            "environmentSource": "catalog-profile", "sourceUrl": SOURCE_URL,
             "note": "环境配置已提供给生成模型；语义一致性与实际行为仍需人工验证，未自动执行被测系统。",
             "records": entries}
 

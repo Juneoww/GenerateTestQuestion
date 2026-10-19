@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import hashlib
+from http.client import HTTPException
 import json
 import re
 import time
@@ -85,6 +86,9 @@ def chat_completion(settings: dict, messages: list[dict]) -> str:
     except urllib.error.HTTPError as error:
         detail = error.read().decode("utf-8", "replace")[:300]
         raise RuntimeError(f"模型接口 HTTP {error.code}：{detail}") from error
+    except HTTPException as error:
+        # 响应中途断开不属于 OSError；统一转换后可进入既有有限重试且不暴露部分正文。
+        raise RuntimeError("模型接口响应中断，请重试。") from error
     except (urllib.error.URLError, TimeoutError, OSError) as error:
         raise RuntimeError(f"模型接口连接失败：{error}") from error
     try:
