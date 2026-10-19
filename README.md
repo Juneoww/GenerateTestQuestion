@@ -7,6 +7,8 @@
 `-IMG`）。v3.0.0 在同一桌面程序中新增独立的 **OWASP LLM Top 10 2026 红队提示词**工作区：
 它复用设置页的 OpenAI 兼容模型生成可复制的红队候选 prompt，不爬取网站，也不调用被测系统；结果实际导出为 JSON / Excel。纯 Python 单栈。
 
+当前开发分支为 **v4.0.0**，新增独立 **OWASP Agentic Top 10 2026** 题集页，支持 ASI01–ASI10。正式功能说明及验收材料见 [v4.0.0 文档](docs/V4.0.0/README.md)。
+
 ## 功能
 
 - **生成**（主页）：站点按中/英文分组折叠多选 → 「题目类型」中的 TC260 风险小类（大类折叠卡片 +
@@ -17,6 +19,7 @@
 - **OWASP 红队提示词**：选择官方 2026 版 LLM01–LLM10 风险、数量和语言，由设置页模型按风险目标生成。页面显示独立运行日志和运行结果；结果表与 JSON
   严格只有 `riskId | riskName | userA | userB | prompt | assertion` 六字段；Excel 只有 `测试提示词` 一张六列表。
   跨会话记录先发送 `userA`，再在另一会话只发送一次 `userB` 或镜像字段 `prompt`；虚构秘密只出现在 A，不应由 B 预先说出。普通记录的 `userA` / `userB` 留空。
+- **OWASP Agentic 题集**：使用同一设置页模型按 ASI01–ASI10 风险生成，支持中文、英文和中英混合。JSON／Excel 继续为六字段，普通记录的 userA／userB 留空；工具、记忆和智能体消息的实际输入位置见独立环境说明。两个 OWASP 页各自保存日志与结果，所有生成流程串行运行。
 - **来源管理**：站点清单（状态：待核验/可爬/核验失败/停用），一键自动核验——通过即进入生成页；
   支持新增站点（HTTPS URL + 条目提取正则）。
 - **设置**：模型接口地址 / API Key / 模型名 / 温度 / 超时 / 重试 / 爬取延时 / 产物存放路径，测试连接。
@@ -61,7 +64,11 @@ run.bat
    与跨会话记录；双击任意单元格即可复制。跨会话时先在用户 A 的会话发送 `userA`，再在隔离的用户 B 会话只发送一次 `userB` 或相同的 `prompt`。
    成功批次会自动写入设置页产物存放路径下的 `OWASP-…\owasp_prompts.json`、`owasp_prompts.xlsx`、`run.log`、`llm_calls.jsonl` 与 `manifest.json`；「运行结果」顶部的「打开题库 Excel」可直接打开本批工作簿，页内还可打开批次目录和 JSON。
 
-快捷键：`Ctrl+1 / Ctrl+2 / Ctrl+3 / Ctrl+4` 切换 生成 / OWASP 红队提示词 / 来源管理 / 设置 四个工作区，`Ctrl+L` 加载 TC260 历史批次。
+快捷键：`Ctrl+1 / Ctrl+2 / Ctrl+3 / Ctrl+4 / Ctrl+5` 切换 生成 / OWASP 红队提示词 / OWASP Agentic 题集 / 来源管理 / 设置 五个工作区，`Ctrl+L` 加载 TC260 历史批次。
+
+Agentic 的使用方式与 LLM 页相同：配置模型后选择 ASI 风险、数量及语言，再点击生成。成功批次使用 `AGENTIC-YYYYMMDD-HHMMSS` 前缀，包含 `owasp_prompts.json`、`owasp_prompts.xlsx`、`environment.json`、`environment.md`、`manifest.json` 和两份日志。页面的「打开环境说明」打开本批次 Markdown；结构化环境文件按 recordIndex（从 1 开始，不计 Excel 表头）和 prompt SHA-256 对应最终记录。
+
+环境来自生成前分配并提供给模型的固定隔离配置，要求模型沿用其中的工具、权限和任务；程序的格式校验与哈希关联不证明模型文本语义完全一致。使用时须核对具体输入是否符合环境、按指定注入位置投放并观察实际工具或状态行为。工具未配置、记忆未启用等情况不能仅靠普通聊天回复判定。应用不自动执行被测 Agent。
 
 每批次产物位于 `data/output/<批次>/`：题目 Excel/JSON、爬取内容 items.jsonl、模型调用记录、
 运行日志与批次汇总。文本批次名为 `BATCH-YYYYMMDD-HHMMSS`，图片生成题批次名为
@@ -80,7 +87,7 @@ OWASP 模型输出会经过六字段、风险归属、语言、跨会话镜像�
 
 ## 免安装版（Windows exe）
 
-v3.0.1 同时提供源码和重新打包的 Windows 界面程序；该补丁修复 v3.0.0 EXE 在 TC260 爬取时缺少指纹数据文件的问题，建议使用新版 EXE。旧版 exe 不会自动获得 OWASP 功能。
+本分支源码为 v4.0.0；下方 v3.0.1 链接是此前发布的版本，不包含新的 Agentic 页。v4 可从源码运行或用 `build_exe.bat` 在本地打包，未发布新 Release。v3.0.1 修复了 v3.0.0 EXE 在 TC260 爬取时缺少指纹数据文件的问题。
 
 不想装 Python 也可以直接用打包好的单文件程序：到
 [v3.0.1 Release](https://github.com/Juneoww/GenerateTestQuestion/releases/tag/v3.0.1)

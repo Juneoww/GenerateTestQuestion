@@ -1,5 +1,13 @@
 # 更新日志
 
+## v4.0.0 — 2026-10-19（开发分支）
+
+- 新增独立 OWASP Agentic Top 10 2026 题集页，支持 ASI01–ASI10、中文／英文／中英混合，由设置页模型动态生成；不自动执行被测 Agent。
+- LLM 与 Agentic 共用配额、去重、补生成、六字段校验与 Excel 导出，保留 LLM02 的跨会话秘密隔离规则。
+- Agentic 批次使用 `AGENTIC-…`，六字段 JSON／Excel 之外另存 `environment.json` 与 `environment.md`，按最终行号和 prompt SHA-256 关联已提供给模型的固定环境配置。
+- 环境文件随完整批次原子发布，失败仅保留诊断；两个 OWASP 页日志、结果与产物路径独立，TC260／LLM／Agentic 串行运行。
+- 工作区增加至五页，支持 Ctrl+1–5；应用版本 4.0.0，六字段输出格式版本保持 3.0.0。
+
 ## v3.0.1 — 2026-10-12
 
 - 修复 Windows 单文件程序在 TC260 爬取开始时找不到 `apify_fingerprint_datapoints/data/input-network-definition.zip` 的问题：打包时纳入 BrowserForge 所需的五个依赖数据文件。

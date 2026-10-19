@@ -1,9 +1,9 @@
 """功能:
-  提供 GenerateTestQuestion 桌面端（纯 Python 单栈）：TC260 生成、OWASP 红队提示词、来源管理、设置四个工作区。
+  提供 GenerateTestQuestion 桌面端：TC260 生成、LLM 提示词、Agentic 题集、来源管理、设置五个工作区。
   TC260 以“爬取网站 → 模型出题”为主流程；OWASP 复用设置页模型生成可复制测试提示词，
   不读取网站、不调用爬虫或被测系统。TC260 题目形式仍支持文本对话题和图片生成题。
 实现:
-  Tkinter 构建四页；TC260 和 OWASP 使用独立后台批次及完成事件，事件经 queue.Queue 投递，
+  Tkinter 构建五页；TC260 和 OWASP 使用独立后台批次及完成事件，事件经 queue.Queue 投递，
   主线程 after 轮询刷新日志；来源核验异步执行并同步网站名单/核验日志。
 输入: data/sources.json、data/settings.json、data/risk_catalog.json，以及内置 OWASP 风险目录。
 输出: data/output/<批次>/（TC260 题目或 OWASP 提示词 JSON / Excel、留痕）、data/reports/（名单与核验日志）、
@@ -32,10 +32,13 @@ import pipeline
 import question_generator
 import reporting
 import storage
+from agentic_workspace import AgenticWorkspace
+from prompt_widgets import configure_prompt_columns
+from owasp_catalog import AGENTIC_FRAMEWORK, AGENTIC_RISKS
 from owasp_prompt_generator import OWASP_RISKS, PROMPT_RECORD_KEYS, validate_prompt_records
 
 PROJECT_ROOT = storage.PROJECT_ROOT  # 冻结为 exe 时即 exe 所在目录
-WORKSPACES = ("生成", "OWASP 红队提示词", "来源管理", "设置")
+WORKSPACES = ("生成", "OWASP 红队提示词", "OWASP Agentic 题集", "来源管理", "设置")
 FONT = "Microsoft YaHei UI"
 
 
@@ -117,11 +120,12 @@ class DesktopApplication(tk.Tk):
         self.notebook.pack(fill="both", expand=True, padx=20, pady=(0, 10))
         self.generate_tab = ttk.Frame(self.notebook, padding=12)
         self.owasp_tab = ttk.Frame(self.notebook, padding=12)
+        self.agentic_tab = ttk.Frame(self.notebook, padding=12)
         self.sources_tab = ttk.Frame(self.notebook, padding=12)
         self.settings_tab = ttk.Frame(self.notebook, padding=12)
         for name, tab in zip(
             WORKSPACES,
-            [self.generate_tab, self.owasp_tab, self.sources_tab, self.settings_tab],
+            [self.generate_tab, self.owasp_tab, self.agentic_tab, self.sources_tab, self.settings_tab],
             strict=True,
         ):
             self.notebook.add(tab, text=name)
@@ -130,6 +134,7 @@ class DesktopApplication(tk.Tk):
                       lambda event, page=index: self.notebook.select(page))
         self._build_generate_tab()
         self._build_owasp_tab()
+        self.agentic_page = AgenticWorkspace(self, self.agentic_tab)
         self._build_sources_tab()
         self._build_settings_tab()
 
@@ -163,6 +168,9 @@ class DesktopApplication(tk.Tk):
         if parent is self.owasp_tab:
             self._owasp_page_inner = inner
             self._owasp_page_canvas = canvas
+        elif parent is self.agentic_tab:
+            self._agentic_page_inner = inner
+            self._agentic_page_canvas = canvas
         else:
             self._page_sync = sync
             self._page_inner = inner
@@ -435,16 +443,7 @@ class DesktopApplication(tk.Tk):
         table_frame = ttk.Frame(result_frame)
         table_frame.pack(fill="both", expand=True)
         self.owasp_result_tree = ttk.Treeview(table_frame, columns=PROMPT_RECORD_KEYS, show="headings", height=16)
-        for key, title, width in (
-            ("riskId", "风险编号", 100),
-            ("riskName", "风险名称", 150),
-            ("userA", "userA", 260),
-            ("userB", "userB", 260),
-            ("prompt", "prompt", 320),
-            ("assertion", "断言", 220),
-        ):
-            self.owasp_result_tree.heading(key, text=title)
-            self.owasp_result_tree.column(key, width=width, minwidth=100, anchor=W, stretch=True)
+        configure_prompt_columns(self.owasp_result_tree)
         self.owasp_result_tree.bind("<Double-1>", self._copy_owasp_clicked_cell)
         tree_scroll = ttk.Scrollbar(table_frame, orient=VERTICAL, command=self.owasp_result_tree.yview)
         x_scroll = ttk.Scrollbar(table_frame, orient=HORIZONTAL, command=self.owasp_result_tree.xview)
@@ -557,6 +556,7 @@ class DesktopApplication(tk.Tk):
         self.open_owasp_xlsx_button.state(["disabled"])
         self.owasp_copy_prompt_button.state(["disabled"])
         self.running = True
+        self._sync_generation_busy()
         for widget in self._owasp_generate_widgets:
             widget.state(["disabled"])
         self.start_button.state(["disabled"])
@@ -575,6 +575,7 @@ class DesktopApplication(tk.Tk):
     def _finish_owasp_batch(self, done: dict) -> None:
         """消费专属 OWASP 完成事件；无效或失败数据不会进入六列表。"""
         self.running = False
+        self._sync_generation_busy()
         for widget in self._owasp_generate_widgets:
             widget.state(["!disabled"])
         self._update_selection_summary()
@@ -925,6 +926,7 @@ class DesktopApplication(tk.Tk):
                   "questionType": question_type}
         storage.save_settings({"questionType": question_type})  # 记住本次的题目形式
         self.running = True
+        self._sync_generation_busy()
         for widget in self._generate_widgets:
             widget.state(["disabled"])
         for widget in self._owasp_generate_widgets:
@@ -943,6 +945,7 @@ class DesktopApplication(tk.Tk):
 
     def _finish_batch(self, done: dict) -> None:
         self.running = False
+        self._sync_generation_busy()
         for widget in self._generate_widgets:
             widget.state(["!disabled"])
         for widget in self._owasp_generate_widgets:
@@ -1123,6 +1126,7 @@ class DesktopApplication(tk.Tk):
             messagebox.showwarning("未选择站点", "请先在表格中选中要核验的站点。", parent=self)
             return
         self.running = True
+        self._sync_generation_busy()
         self._set_status(f"核验 {len(targets)} 个站点…")
 
         def work() -> None:
@@ -1147,6 +1151,7 @@ class DesktopApplication(tk.Tk):
 
     def _finish_verify(self, done: dict) -> None:
         self.running = False
+        self._sync_generation_busy()
         self._refresh_all()
         self._set_status(f"核验完成：通过 {done.get('passed', 0)} / {done.get('total', 0)}")
         messagebox.showinfo("核验完成",
@@ -1244,7 +1249,7 @@ class DesktopApplication(tk.Tk):
         output_row = list(labels).index("outputDir")
         ttk.Button(frame, text="浏览…", command=self._pick_output_dir).grid(
             row=output_row, column=2, sticky=W, padx=(6, 0))
-        ttk.Label(frame, text="TC260 产物存入 BATCH-…；OWASP 提示词存入 OWASP-…；"
+        ttk.Label(frame, text="TC260 产物存入 BATCH-…；LLM 提示词存入 OWASP-…；Agentic 存入 AGENTIC-…；"
                               "留空则使用程序目录 data\\output。", style="Subtle.TLabel").grid(
             row=len(labels), column=0, columnspan=3, sticky=W, padx=8, pady=(0, 6))
         buttons = ttk.Frame(self.settings_tab)
@@ -1338,6 +1343,14 @@ class DesktopApplication(tk.Tk):
         except Exception as error:  # noqa: BLE001 - 数据文件异常直接呈现
             self._set_status(f"数据加载失败：{error}")
 
+    def _sync_generation_busy(self) -> None:
+        """同步 TC260、LLM 和 Agentic 的单批次互斥状态。"""
+        for widget in (*self._generate_widgets, *self._owasp_generate_widgets):
+            widget.state(["disabled"] if self.running else ["!disabled"])
+        self._update_selection_summary()
+        self._update_owasp_selection_summary()
+        self.agentic_page.set_busy(self.running)
+
     def _poll_events(self) -> None:
         while True:
             try:
@@ -1349,6 +1362,8 @@ class DesktopApplication(tk.Tk):
                 kind = event.get("kind")
                 if kind == "batch":
                     self._finish_batch(event)
+                elif kind == "agentic_batch":
+                    self.agentic_page.finish(event)
                 elif kind == "owasp_batch":
                     self._finish_owasp_batch(event)
                 elif kind == "verify":
@@ -1359,7 +1374,8 @@ class DesktopApplication(tk.Tk):
             if event.get("kind") == "owasp":
                 risk = f"{event['riskId']} · " if event.get("riskId") else ""
                 self._set_status(f"OWASP 进度：{risk}{event.get('message', '')}")
-                self._append_log(event, self.owasp_log_text)
+                target = self.agentic_page.log_text if event.get("framework") == AGENTIC_FRAMEWORK else self.owasp_log_text
+                self._append_log(event, target)
             else:
                 self._append_log(event)
         self.after(120, self._poll_events)
@@ -1391,7 +1407,7 @@ class DesktopApplication(tk.Tk):
             except (ValueError, OSError):
                 # 设置目录变更后，仅信任当前 OWASP 批次已记录的三个完整路径。
                 recorded_owasp_paths = set()
-                for recorded in (self.owasp_batch_dir, self.owasp_json, self.owasp_xlsx):
+                for recorded in (self.owasp_batch_dir, self.owasp_json, self.owasp_xlsx, *self.agentic_page.artifact_paths()):
                     if not recorded:
                         continue
                     try:
@@ -1436,6 +1452,7 @@ def smoke_test() -> dict:
         "workspaces": list(WORKSPACES),
         "catalog": {"scenes": len(scenes), "risks": len(risks)},
         "owasp": {"risks": len(OWASP_RISKS)},
+        "agentic": {"framework": AGENTIC_FRAMEWORK, "risks": len(AGENTIC_RISKS)},
         "sources": {"total": len(sources),
                     "ready": sum(1 for s in sources if s.get("status") == "ready")},
         "modelConfigured": bool(settings["baseUrl"] and settings["model"]),

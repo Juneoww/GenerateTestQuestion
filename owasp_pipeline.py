@@ -1,10 +1,10 @@
 """功能：
-  编排 OWASP LLM Top 10 2026 提示词的实际批次生成与文件交付。
+  编排 OWASP LLM／Agentic Top 10 2026 提示词的实际批次生成与文件交付。
 实现：
   校验模型设置后调用 OWASP 模型生成器；事件和每次模型调用分别写入运行日志与调用日志。
   JSON、Excel、manifest 和日志先在隐藏暂存目录写好，再一次发布；失败时仅发布诊断文件。
 输入：
-  params{riskIds,total,language}、完整模型设置、事件回调及可注入的时钟和聊天函数。
+  params{framework?,riskIds,total,language}、完整模型设置、事件回调及可注入的时钟和聊天函数。
 输出：
   完成或失败的批次汇总；完成时含最终 JSON、Excel 路径和六字段记录。
 依赖：
@@ -20,9 +20,10 @@ from typing import Callable
 
 import question_generator
 import storage
+from owasp_catalog import AGENTIC_FRAMEWORK, CATALOG_VERSION, LLM_FRAMEWORK, catalog_for, framework_config
+from owasp_environment import write_environment_files
 from owasp_export import export_prompt_xlsx
 from owasp_prompt_generator import (
-    OWASP_RISKS,
     _canonical_risk_ids,
     _normalize_language,
     generate_prompt_records,
@@ -40,12 +41,13 @@ def _now_iso() -> str:
 class _EventTee:
     """同一事件同时写入本批次 run.log 并投递给界面回调。"""
 
-    def __init__(self, on_event: Callable[[dict], None], log_path: Path):
+    def __init__(self, on_event: Callable[[dict], None], log_path: Path, framework: str = LLM_FRAMEWORK):
         self.on_event = on_event
         self.log_path = log_path
+        self.framework = framework
 
     def __call__(self, event: dict) -> None:
-        logged = {"ts": _now_iso(), **event, "kind": "owasp"}
+        logged = {"ts": _now_iso(), **event, "kind": "owasp", "framework": self.framework, "catalogVersion": CATALOG_VERSION}
         with self.log_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(logged, ensure_ascii=False) + "\n")
         self.on_event(logged)
@@ -69,20 +71,22 @@ def _validate_request(params: dict, settings: dict, on_event: Callable[[dict], N
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError(f"模型设置 {key} 必须是整数。") from error
 
-    risk_ids = _canonical_risk_ids(params.get("riskIds"))
+    framework = params.get("framework", LLM_FRAMEWORK)
+    framework_config(framework)
+    risk_ids = _canonical_risk_ids(params.get("riskIds"), framework)
     total = params.get("total")
-    if type(total) is not int or total < len(risk_ids):
-        raise ValueError(f"生成数量必须是至少 {len(risk_ids)} 的整数。")
+    if type(total) is not int or not len(risk_ids) <= total <= 1000:
+        raise ValueError(f"生成数量必须是 {len(risk_ids)} 至 1000 的整数。")
     language = params.get("language")
     _normalize_language(language)
     base, extra = divmod(total, len(risk_ids))
-    catalog = {risk["riskId"]: risk for risk in OWASP_RISKS}
+    catalog = {risk["riskId"]: risk for risk in catalog_for(framework)}
     by_risk = [
         {"riskId": risk_id, "riskName": catalog[risk_id]["riskName"],
          "target": base + (index < extra), "generated": 0, "calls": 0}
         for index, risk_id in enumerate(risk_ids)
     ]
-    return {"riskIds": risk_ids, "total": total, "language": language}, by_risk
+    return {"framework": framework, "riskIds": risk_ids, "total": total, "language": language}, by_risk
 
 
 def resolve_output_dir(settings: dict | None) -> Path:
@@ -94,10 +98,10 @@ def resolve_output_dir(settings: dict | None) -> Path:
     return candidate if candidate.is_absolute() else storage.PROJECT_ROOT / candidate
 
 
-def _create_batch_paths(output_root: Path, now: datetime) -> tuple[str, Path, Path]:
+def _create_batch_paths(output_root: Path, now: datetime, prefix: str = "OWASP") -> tuple[str, Path, Path]:
     """预留隐藏暂存目录；同秒冲突时追加序号，绝不覆盖已发布的批次。"""
     output_root.mkdir(parents=True, exist_ok=True)
-    base_id = f"OWASP-{now:%Y%m%d-%H%M%S}"
+    base_id = f"{prefix}-{now:%Y%m%d-%H%M%S}"
     suffix = 0
     while True:
         batch_id = base_id if suffix == 0 else f"{base_id}-{suffix:02d}"
@@ -148,6 +152,8 @@ def _build_manifest(batch_id: str, created_at: datetime, params: dict, model: st
     return {
         "formatVersion": "3.0.0",
         "artifactKind": "owaspPromptSet",
+        "framework": params.get("framework", LLM_FRAMEWORK),
+        "catalogVersion": CATALOG_VERSION,
         "batchId": batch_id,
         "createdAt": created_at.isoformat(),
         "status": status,
@@ -164,6 +170,8 @@ def _build_manifest(batch_id: str, created_at: datetime, params: dict, model: st
             "xlsx": "owasp_prompts.xlsx" if completed else "",
             "runLog": "run.log",
             "llmCalls": "llm_calls.jsonl",
+            "environment": "environment.json" if completed and params.get("framework") == AGENTIC_FRAMEWORK else "",
+            "environmentMarkdown": "environment.md" if completed and params.get("framework") == AGENTIC_FRAMEWORK else "",
         },
     }
 
@@ -171,7 +179,7 @@ def _build_manifest(batch_id: str, created_at: datetime, params: dict, model: st
 def _cleanup_hidden_staging(staging_dir: Path) -> None:
     """仅清理本次暂存中的已知文件；被 Windows 锁住时保留隐藏目录。"""
     for name in ("owasp_prompts.json", "owasp_prompts.xlsx", "manifest.json",
-                 "run.log", "llm_calls.jsonl"):
+                 "run.log", "llm_calls.jsonl", "environment.json", "environment.md"):
         try:
             (staging_dir / name).unlink(missing_ok=True)
         except OSError:
@@ -237,6 +245,8 @@ def _failure_summary(batch_id: str, batch_dir: Path, staging_dir: Path,
         "recordCount": 0,
         "jsonPath": "",
         "xlsxPath": "",
+        "environmentPath": "", "environmentMarkdownPath": "",
+        "framework": params.get("framework", LLM_FRAMEWORK),
         "records": [],
     }
 
@@ -253,14 +263,15 @@ def run_batch(
     created_at = (now_fn or datetime.now)()
     if not isinstance(created_at, datetime):
         raise ValueError("批次时钟必须返回 datetime。")
-    batch_id, batch_dir, staging_dir = _create_batch_paths(resolve_output_dir(settings), created_at)
+    framework = normalized_params["framework"]
+    batch_id, batch_dir, staging_dir = _create_batch_paths(resolve_output_dir(settings), created_at, framework_config(framework)["prefix"])
     final_json = batch_dir / "owasp_prompts.json"
     final_xlsx = batch_dir / "owasp_prompts.xlsx"
     staged_json = staging_dir / final_json.name
     staged_xlsx = staging_dir / final_xlsx.name
     run_log = staging_dir / "run.log"
     calls_log = staging_dir / "llm_calls.jsonl"
-    events = _EventTee(on_event, run_log)
+    events = _EventTee(on_event, run_log, framework)
     stats_by_id = {item["riskId"]: item for item in by_risk}
 
     def record_call(record: dict) -> None:
@@ -278,10 +289,12 @@ def run_batch(
         records = generate_prompt_records(
             normalized_params["riskIds"], normalized_params["total"],
             normalized_params["language"], settings, chat_fn=chat_fn,
-            record_call=record_call, on_event=events,
+            record_call=record_call, on_event=events, framework=framework,
         )
         _write_json_file(staged_json, records)
         export_prompt_xlsx(records, staged_xlsx)
+        if framework == AGENTIC_FRAMEWORK:
+            write_environment_files(records, staging_dir)
         events({"stage": "export", "level": "info",
                 "message": f"OWASP 批次 {batch_id} 已生成 {len(records)} 条，正在发布 JSON 与 Excel。"})
         manifest = _build_manifest(batch_id, created_at, normalized_params, settings["model"],
@@ -299,5 +312,8 @@ def run_batch(
         "recordCount": len(records),
         "jsonPath": str(final_json),
         "xlsxPath": str(final_xlsx),
+        "environmentPath": str(batch_dir / "environment.json") if framework == AGENTIC_FRAMEWORK else "",
+        "environmentMarkdownPath": str(batch_dir / "environment.md") if framework == AGENTIC_FRAMEWORK else "",
+        "framework": framework,
         "records": records,
     }
