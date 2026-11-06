@@ -149,7 +149,8 @@ class OwaspWorkspaceUiTests(unittest.TestCase):
         self.assertIn("设置页模型", self.window.owasp_go_hint.cget("text"))
         setting_labels = [
             widget.cget("text")
-            for widget in self.window.settings_tab.winfo_children()[0].winfo_children()
+            for page_id in self.window.settings_notebook.tabs()
+            for widget in self.window.nametowidget(page_id).winfo_children()
             if isinstance(widget, app.ttk.Label)
         ]
         self.assertIn("单次请求最多生成条数", setting_labels)

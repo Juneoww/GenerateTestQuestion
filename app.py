@@ -19,6 +19,7 @@ import json
 import os
 import queue
 import sys
+import tempfile
 import threading
 import webbrowser
 from datetime import datetime
@@ -52,6 +53,7 @@ class DesktopApplication(tk.Tk):
         self.minsize(1020, 720)
         self.events: queue.Queue = queue.Queue()
         self.running = False
+        self._image_test_in_progress = False
         self.current_questions: list[dict] = []
         self.current_batch_dir = ""
         self.current_xlsx = ""
@@ -922,6 +924,9 @@ class DesktopApplication(tk.Tk):
             messagebox.showwarning("缺少模型配置", "请先到“设置”页配置接口地址、API Key 与模型名。", parent=self)
             return
         question_type = self.question_type_var.get()
+        if question_type == "image" and not (settings["imageBaseUrl"].strip() and settings["imageModel"].strip()):
+            messagebox.showwarning("缺少文生图模型配置", "请先到“设置 → 文生图模型”填写接口地址和模型名。", parent=self)
+            return
         params = {"sourceIds": site_ids, "riskIds": risk_ids, "total": total, "zhPercent": zh_percent,
                   "questionType": question_type}
         storage.save_settings({"questionType": question_type})  # 记住本次的题目形式
@@ -964,22 +969,34 @@ class DesktopApplication(tk.Tk):
         self._populate_question_tree()
         batch_status = summary.get("status", "completed")
         outcome = {"completed": "完成", "failed": "失败", "aborted": "已中止"}.get(batch_status, "完成")
+        image_summary = summary.get("imageSummary")
+        image_note = ""
+        if image_summary:
+            image_note = (f"\n图片：成功 {image_summary.get('imageSuccessCount', 0)}，"
+                          f"拒绝 {image_summary.get('imageRejectedCount', 0)}，"
+                          f"失败 {image_summary.get('imageFailedCount', 0)}")
         self._set_status(f"批次 {summary['batchId']} {outcome}：{summary['questionCount']} 题"
-                         f"（中 {summary['zhCount']} / 英 {summary['enCount']}）")
+                         f"（中 {summary['zhCount']} / 英 {summary['enCount']}）" + image_note.replace("\n", "；"))
         if batch_status == "failed":
             messagebox.showerror("生成失败", f"{summary.get('error') or '本批次未生成有效题目。'}\n\n"
-                                 f"批次与日志已保留：{self.current_batch_dir}", parent=self)
+                                 f"批次与日志已保留：{self.current_batch_dir}{image_note}", parent=self)
             return
         if batch_status == "aborted":
             messagebox.showwarning("生成已中止", f"{summary.get('error') or '批次已中止。'}\n"
                                    f"已保留 {summary['questionCount']} 题。\n"
-                                   f"批次与日志：{self.current_batch_dir}", parent=self)
+                                   f"批次与日志：{self.current_batch_dir}{image_note}", parent=self)
             return
         shortage = summary.get("shortage", [])
         note = f"，缺口 {len(shortage)} 项" if shortage else ""
+        if image_summary and image_summary.get("status") in ("partial", "failed"):
+            self._set_status(f"批次 {summary['batchId']} 图片未全部生成" + image_note.replace("\n", "；"))
+            messagebox.showwarning("图片未全部生成",
+                                   f"批次 {summary['batchId']}\n提示词 {summary['questionCount']} 条{image_note}\n"
+                                   f"批次与日志：{self.current_batch_dir}", parent=self)
+            return
         messagebox.showinfo("生成完成",
                             f"批次 {summary['batchId']}\n产出 {summary['questionCount']} 题"
-                            f"（中文 {summary['zhCount']} / 英文 {summary['enCount']}）{note}",
+                            f"（中文 {summary['zhCount']} / 英文 {summary['enCount']}）{note}{image_note}",
                             parent=self)
 
     def _populate_question_tree(self) -> None:
@@ -1057,6 +1074,14 @@ class DesktopApplication(tk.Tk):
         question_type = question.get("questionType") or "text"
         if question_type == "image":
             type_line = "【题型】图片生成题（题干为文生图提示词）\n"
+            if question.get("imageStatus"):
+                status = {"success": "成功", "rejected": "被拒绝", "failed": "失败"}.get(
+                    question["imageStatus"], question["imageStatus"])
+                type_line += f"【图片状态】{status}\n"
+                if question.get("imagePath"):
+                    type_line += f"【图片路径】{question['imagePath']}\n"
+                if question.get("imageError"):
+                    type_line += f"【图片原因】{question['imageError']}\n"
         else:
             type_line = "【题型】文本对话题\n"
         self.detail_text.insert("1.0", (
@@ -1226,36 +1251,52 @@ class DesktopApplication(tk.Tk):
 
     # ------------------------------------------------------------------ 设置页
     def _build_settings_tab(self) -> None:
-        frame = ttk.LabelFrame(self.settings_tab, text="模型配置（OpenAI 兼容接口）", style="Card.TLabelframe")
-        frame.pack(fill=X)
+        self.settings_notebook = ttk.Notebook(self.settings_tab)
+        self.settings_notebook.pack(fill=X)
+        text_frame = ttk.Frame(self.settings_notebook, padding=10)
+        image_frame = ttk.Frame(self.settings_notebook, padding=10)
+        common_frame = ttk.Frame(self.settings_notebook, padding=10)
+        for pane, title in ((text_frame, "文字模型"), (image_frame, "文生图模型"), (common_frame, "通用设置")):
+            self.settings_notebook.add(pane, text=title)
         self.setting_vars = {
             "baseUrl": tk.StringVar(), "apiKey": tk.StringVar(), "model": tk.StringVar(),
+            "imageBaseUrl": tk.StringVar(), "imageApiKey": tk.StringVar(), "imageModel": tk.StringVar(),
+            "imageTimeoutSeconds": tk.StringVar(), "imageRetries": tk.StringVar(),
             "temperature": tk.StringVar(), "timeoutSeconds": tk.StringVar(),
             "retries": tk.StringVar(), "maxQuestionsPerItem": tk.StringVar(),
             "crawlDelayMs": tk.StringVar(), "requestTimeoutSeconds": tk.StringVar(),
             "outputDir": tk.StringVar(),
         }
-        labels = {
+        groups = ((text_frame, {
             "baseUrl": "接口地址（含 /v1 等版本号）", "apiKey": "API Key", "model": "模型名",
             "temperature": "温度", "timeoutSeconds": "接口超时（秒）", "retries": "出题重试次数",
-            "maxQuestionsPerItem": "单次请求最多生成条数", "crawlDelayMs": "爬取请求间隔（毫秒）",
-            "requestTimeoutSeconds": "爬取超时（秒）", "outputDir": "产物存放路径",
-        }
-        for row, (key, label) in enumerate(labels.items()):
-            ttk.Label(frame, text=label).grid(row=row, column=0, sticky=W, padx=8, pady=5)
-            entry = ttk.Entry(frame, textvariable=self.setting_vars[key], width=52,
-                              show="*" if key == "apiKey" else "")
-            entry.grid(row=row, column=1, sticky=W, pady=5)
-        output_row = list(labels).index("outputDir")
-        ttk.Button(frame, text="浏览…", command=self._pick_output_dir).grid(
-            row=output_row, column=2, sticky=W, padx=(6, 0))
-        ttk.Label(frame, text="TC260 产物存入 BATCH-…；LLM 提示词存入 OWASP-…；Agentic 存入 AGENTIC-…；"
+            "maxQuestionsPerItem": "单次请求最多生成条数"}),
+            (image_frame, {"imageBaseUrl": "接口地址（含 /v1 等版本号）", "imageApiKey": "API Key",
+                           "imageModel": "模型名", "imageTimeoutSeconds": "接口超时（秒）",
+                           "imageRetries": "生图重试次数"}),
+            (common_frame, {"crawlDelayMs": "爬取请求间隔（毫秒）", "requestTimeoutSeconds": "爬取超时（秒）",
+                            "outputDir": "产物存放路径"}))
+        for frame, labels in groups:
+            frame.columnconfigure(1, weight=1)
+            for row, (key, label) in enumerate(labels.items()):
+                ttk.Label(frame, text=label).grid(row=row, column=0, sticky=W, padx=8, pady=5)
+                entry = ttk.Entry(frame, textvariable=self.setting_vars[key], width=52,
+                                  show="*" if key in ("apiKey", "imageApiKey") else "")
+                entry.grid(row=row, column=1, sticky="ew", pady=5)
+        ttk.Label(image_frame, text="生成图片题时调用图像接口，可能产生费用。", style="Subtle.TLabel").grid(
+            row=5, column=0, columnspan=2, sticky=W, padx=8, pady=6)
+        ttk.Button(text_frame, text="测试连通", command=lambda: self._test_connection_async("text")).grid(
+            row=7, column=0, sticky=W, padx=8, pady=6)
+        self.image_test_button = ttk.Button(image_frame, text="测试连通", command=lambda: self._test_connection_async("image"))
+        self.image_test_button.grid(row=6, column=0, sticky=W, padx=8, pady=6)
+        ttk.Button(common_frame, text="浏览…", command=self._pick_output_dir).grid(
+            row=2, column=2, sticky=W, padx=(6, 0))
+        ttk.Label(common_frame, text="TC260 产物存入 BATCH-…；LLM 提示词存入 OWASP-…；Agentic 存入 AGENTIC-…；"
                               "留空则使用程序目录 data\\output。", style="Subtle.TLabel").grid(
-            row=len(labels), column=0, columnspan=3, sticky=W, padx=8, pady=(0, 6))
+            row=3, column=0, columnspan=3, sticky=W, padx=8, pady=(0, 6))
         buttons = ttk.Frame(self.settings_tab)
         buttons.pack(fill=X, pady=(10, 0))
         ttk.Button(buttons, text="保存设置", command=self._save_settings).pack(side=LEFT)
-        ttk.Button(buttons, text="测试连接", command=self._test_connection_async).pack(side=LEFT, padx=8)
         self.connection_result = tk.StringVar(value="")
         ttk.Label(buttons, textvariable=self.connection_result, style="Subtle.TLabel").pack(side=LEFT, padx=10)
         self._load_settings_into_form()
@@ -1278,7 +1319,8 @@ class DesktopApplication(tk.Tk):
             raw = variable.get().strip()
             if key in ("temperature",):
                 patch[key] = float(raw) if raw else storage.SETTINGS_DEFAULTS[key]
-            elif key in ("timeoutSeconds", "retries", "maxQuestionsPerItem", "crawlDelayMs", "requestTimeoutSeconds"):
+            elif key in ("timeoutSeconds", "retries", "maxQuestionsPerItem", "crawlDelayMs", "requestTimeoutSeconds",
+                         "imageTimeoutSeconds", "imageRetries"):
                 patch[key] = int(raw) if raw else storage.SETTINGS_DEFAULTS[key]
             else:
                 patch[key] = raw
@@ -1303,33 +1345,79 @@ class DesktopApplication(tk.Tk):
             patch["outputDir"] = str(out_path)
         merged = storage.save_settings(patch)
         self._set_status("设置已保存")
-        self.connection_result.set(f"已保存：{merged['model'] or '（未填模型名）'}")
+        selected_tab = self.settings_notebook.index(self.settings_notebook.select())
+        if selected_tab == 0:
+            self.connection_result.set(f"已保存文字模型：{merged['model'] or '（未填模型名）'}")
+        elif selected_tab == 1:
+            self.connection_result.set(f"已保存文生图模型：{merged['imageModel'] or '（未填模型名）'}")
+        else:
+            self.connection_result.set("设置已保存")
 
-    def _test_connection_async(self) -> None:
+    def _test_connection_async(self, model_kind: str = "text") -> None:
+        if model_kind == "image" and self._image_test_in_progress:
+            return
         try:
-            patch = self._collect_settings()
+            if model_kind == "image":
+                patch = {key: self.setting_vars[key].get().strip() for key in
+                         ("imageBaseUrl", "imageApiKey", "imageModel", "imageTimeoutSeconds")}
+                patch["imageTimeoutSeconds"] = int(patch["imageTimeoutSeconds"] or storage.SETTINGS_DEFAULTS["imageTimeoutSeconds"])
+                # 连通测试仅发起一次生成，避免因自动重试产生额外费用。
+                patch["imageRetries"] = 0
+            else:
+                patch = self._collect_settings()
         except ValueError:
             messagebox.showwarning("格式错误", "数值字段必须填写数字。", parent=self)
             return
-        if not (patch["baseUrl"] and patch["model"]):
+        base_key, model_key = ("imageBaseUrl", "imageModel") if model_kind == "image" else ("baseUrl", "model")
+        if not (patch[base_key] and patch[model_key]):
             messagebox.showwarning("缺少配置", "请先填写接口地址与模型名。", parent=self)
             return
+        if model_kind == "image":
+            if not messagebox.askyesno("确认测试生图", "将调用文生图模型生成一张测试图片，可能产生费用。是否继续？", parent=self):
+                return
+            self._image_test_in_progress = True
+            self.image_test_button.state(["disabled"])
         self.connection_result.set("测试中…")
 
         def work() -> None:
             try:
-                reply = question_generator.test_connection(patch)
+                if model_kind == "image":
+                    import image_generator
+                    test_root = storage.DATA_DIR / "image-tests"
+                    test_root.mkdir(parents=True, exist_ok=True)
+                    test_dir = Path(tempfile.mkdtemp(prefix="test-", dir=test_root))
+                    result = image_generator.generate_image("一只可爱的小猫咪坐在阳光明媚的窗台上，背景是蓝天白云。", patch, test_dir, 1)
+                    if result.get("imageStatus") != "success" or not result.get("imagePath"):
+                        try:
+                            test_dir.rmdir()
+                        except OSError:
+                            pass
+                        self.events.put({"stage": "_done", "kind": "test", "ok": False,
+                                         "error": result.get("imageError") or "生成测试图片失败。", "modelKind": model_kind})
+                        return
+                    image_path = str(test_dir / result["imagePath"])
+                    self.events.put({"stage": "_done", "kind": "test", "ok": True, "reply": "测试图片已生成", "imagePath": image_path, "modelKind": model_kind})
+                    return
+                else:
+                    reply = question_generator.test_connection(patch)
             except Exception as error:  # noqa: BLE001 - 展示给操作者
-                self.events.put({"stage": "_done", "kind": "test", "ok": False, "error": str(error)})
+                detail = "图片测试发生异常，请检查配置和本地存储。" if model_kind == "image" else str(error)
+                self.events.put({"stage": "_done", "kind": "test", "ok": False, "error": detail, "modelKind": model_kind})
             else:
-                self.events.put({"stage": "_done", "kind": "test", "ok": True, "reply": reply})
+                self.events.put({"stage": "_done", "kind": "test", "ok": True, "reply": reply, "modelKind": model_kind})
 
         threading.Thread(target=work, daemon=True).start()
 
     def _finish_test(self, done: dict) -> None:
+        if done.get("modelKind") == "image":
+            self._image_test_in_progress = False
+            self.image_test_button.state(["!disabled"])
         if done.get("ok"):
-            self.connection_result.set(f"连接成功：{done.get('reply', '')}")
+            kind = "文生图" if done.get("modelKind") == "image" else "文字"
+            self.connection_result.set(f"{kind}模型：{done.get('reply', '')}")
             self._set_status("模型连接正常")
+            if done.get("imagePath"):
+                messagebox.showinfo("测试成功", f"测试图片已生成：\n{done['imagePath']}", parent=self)
         else:
             self.connection_result.set("连接失败")
             messagebox.showerror("连接失败", done.get("error", ""), parent=self)

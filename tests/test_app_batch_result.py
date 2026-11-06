@@ -79,6 +79,25 @@ class BatchResultUiTests(unittest.TestCase):
         self.assertIn(self.question["question"], self.window.detail_text.get("1.0", "end-1c"))
         self.assertTrue(self.window.open_xlsx_button.instate(["!disabled"]))
 
+    def test_partial_image_batch_reports_counts_and_warns(self):
+        summary = {**self.summary, "status": "completed", "error": "", "questions": [self.question],
+                   "questionCount": 1, "zhCount": 1,
+                   "imageSummary": {"status": "failed", "imageSuccessCount": 0,
+                                    "imageRejectedCount": 1, "imageFailedCount": 0}}
+        with patch.object(app.messagebox, "showwarning") as warning, \
+                patch.object(app.messagebox, "showinfo") as info:
+            self.window._finish_batch({"ok": True, "summary": summary})
+        warning.assert_called_once()
+        self.assertIn("拒绝 1", warning.call_args.args[1])
+        info.assert_not_called()
+
+    def test_image_question_details_show_result_path(self):
+        self.question.update(questionType="image", imageStatus="success", imagePath="images/0001.png")
+        self.window.current_questions = [self.question]
+        self.window._populate_question_tree()
+        self.window._on_question_selected()
+        self.assertIn("images/0001.png", self.window.detail_text.get("1.0", "end-1c"))
+
 
 if __name__ == "__main__":
     unittest.main()

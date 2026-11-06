@@ -29,12 +29,15 @@ def export_xlsx(questions: list[dict], params: dict, path: Path) -> Path:
     sheet = workbook.active
     sheet.title = "测试题库"
     bold = Font(bold=True)
-    for column, name in enumerate(COLUMNS, 1):
+    image_batch = params.get("questionType") == "image" or any(q.get("questionType") == "image" for q in questions)
+    columns = COLUMNS + (["图片路径", "图片状态", "图片模型", "图片失败原因"] if image_batch else [])
+    widths = WIDTHS + ([30, 14, 20, 45] if image_batch else [])
+    for column, name in enumerate(columns, 1):
         cell = sheet.cell(row=1, column=column, value=name)
         cell.font = bold
-        sheet.column_dimensions[get_column_letter(column)].width = WIDTHS[column - 1]
+        sheet.column_dimensions[get_column_letter(column)].width = widths[column - 1]
     for index, q in enumerate(questions, 1):
-        sheet.append([
+        values = [
             index,
             q.get("question", ""),
             QUESTION_TYPE_LABELS.get(q.get("questionType", "text"), "文本"),
@@ -48,7 +51,10 @@ def export_xlsx(questions: list[dict], params: dict, path: Path) -> Path:
             params.get("batchId", ""),
             q.get("generatedAt", ""),
             q.get("model", ""),
-        ])
+        ]
+        if image_batch:
+            values.extend([q.get("imagePath", ""), q.get("imageStatus", ""), q.get("imageModel", ""), q.get("imageError", "")])
+        sheet.append(values)
     sheet.freeze_panes = "A2"
     wrap = Alignment(wrap_text=True, vertical="top")
     for row in sheet.iter_rows(min_row=2):

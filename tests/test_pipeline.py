@@ -15,6 +15,7 @@ SETTINGS = {
     "baseUrl": "", "apiKey": "", "model": "test-model", "temperature": 0.5,
     "timeoutSeconds": 5, "retries": 2, "maxQuestionsPerItem": 5,
     "crawlDelayMs": 0, "requestTimeoutSeconds": 5, "responseLimitMiB": 2,
+    "imageBaseUrl": "https://example.com/v1", "imageModel": "test-image",
 }
 FAKE_SOURCES = [
     {"sourceId": "S1", "name": "来源一", "url": "https://s1.com", "language": "zh",
@@ -68,7 +69,9 @@ def fake_generate_empty(*args, **kwargs):
 
 class PipelineTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp(prefix="gtq_pipe_"))
+        temp_dir = tempfile.TemporaryDirectory(prefix="gtq_pipe_")
+        self.addCleanup(temp_dir.cleanup)
+        self.tmp = Path(temp_dir.name)
         self.original_output = pipeline.OUTPUT_DIR
         self.original_load = pipeline.storage.load_sources
         self.original_crawl = pipeline.crawler.crawl_source
@@ -81,11 +84,85 @@ class PipelineTests(unittest.TestCase):
         self.addCleanup(setattr, pipeline.crawler, "crawl_source", self.original_crawl)
 
     def run_batch(self, generate_fn=fake_generate, total=3, zh_percent=67, risk_ids=None,
-                  question_type="text"):
+                  question_type="text", image_fn=None):
         params = {"sourceIds": ["S1", "S2"], "riskIds": risk_ids or ["A1-01", "A1-02"],
                   "total": total, "zhPercent": zh_percent, "questionType": question_type}
         return pipeline.run_batch(params, SETTINGS, self.events.append,
-                                  fetch_fn=lambda *a: (200, "", ""), generate_fn=generate_fn)
+                                  fetch_fn=lambda *a: (200, "", ""), generate_fn=generate_fn,
+                                  image_fn=image_fn or self.fake_image)
+
+    @staticmethod
+    def fake_image(prompt, settings, batch_dir, seq):
+        path = batch_dir / "images" / f"{seq:04}.png"
+        path.parent.mkdir(exist_ok=True)
+        path.write_bytes(b"image")
+        return {"imageStatus": "success", "imagePath": f"images/{seq:04}.png",
+                "imageError": "", "imageModel": "test-image", "attempts": 1, "elapsedMs": 1}
+
+    def test_image_results_preserve_files_and_report_partial_status(self):
+        def fake_image(prompt, settings, batch_dir, seq):
+            if seq == 1:
+                return self.fake_image(prompt, settings, batch_dir, seq)
+            return {"imageStatus": "rejected" if seq == 2 else "failed", "imagePath": "",
+                    "imageError": "拒绝" if seq == 2 else "出错", "imageModel": "test-image"}
+        summary = self.run_batch(total=3, zh_percent=100, risk_ids=["A1-01"],
+                                 question_type="image", image_fn=fake_image)
+        batch = Path(summary["batchDir"])
+        self.assertEqual(summary["imageSummary"], {"status": "partial", "promptCount": 3,
+                         "imageSuccessCount": 1, "imageRejectedCount": 1, "imageFailedCount": 1})
+        self.assertTrue((batch / summary["questions"][0]["imagePath"]).is_file())
+        self.assertEqual([q["imageStatus"] for q in summary["questions"]], ["success", "rejected", "failed"])
+        manifest = json.loads((batch / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["imageSummary"], summary["imageSummary"])
+        from openpyxl import load_workbook
+        workbook = load_workbook(batch / "questions.xlsx", read_only=True)
+        self.addCleanup(workbook.close)
+        ws = workbook.active
+        self.assertEqual([ws.cell(1, c).value for c in range(14, 18)],
+                         ["图片路径", "图片状态", "图片模型", "图片失败原因"])
+
+    def test_global_image_failure_stops_remaining_requests(self):
+        generate_image = Mock(return_value={"imageStatus": "failed", "imageError": "鉴权失败",
+                                           "globalError": True})
+        summary = self.run_batch(total=3, zh_percent=100, risk_ids=["A1-01"],
+                                 question_type="image", image_fn=generate_image)
+        self.assertEqual(generate_image.call_count, 1)
+        self.assertEqual(summary["imageSummary"]["imageFailedCount"], 3)
+        self.assertEqual(summary["imageSummary"]["status"], "failed")
+        self.assertIn("未调用", summary["questions"][1]["imageError"])
+
+    def test_image_batch_requires_configuration_before_crawling(self):
+        params = {"sourceIds": ["S1"], "riskIds": ["A1-01"], "total": 1,
+                  "zhPercent": 100, "questionType": "image"}
+        with self.assertRaisesRegex(ValueError, "文生图"):
+            pipeline.run_batch(params, dict(SETTINGS, imageBaseUrl=""), self.events.append,
+                               generate_fn=fake_generate, image_fn=self.fake_image)
+        self.assertEqual(list(self.tmp.iterdir()), [])
+
+    def test_same_second_batch_names_do_not_overwrite(self):
+        from datetime import datetime
+        from unittest.mock import patch
+        class FixedClock(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return cls(2026, 11, 3, 12, 0, 0, tzinfo=tz)
+        with patch.object(pipeline, "datetime", FixedClock):
+            first = self.run_batch(total=1, question_type="image")
+            first_file = Path(first["batchDir"]) / "images/0001.png"
+            first_file.write_bytes(b"first batch")
+            second = self.run_batch(total=1, question_type="image")
+        self.assertNotEqual(first["batchDir"], second["batchDir"])
+        self.assertTrue(second["batchId"].endswith("-IMG"))
+        self.assertEqual(first_file.read_bytes(), b"first batch")
+
+    def test_image_event_has_safe_diagnostics_and_progress_omits_evidence(self):
+        summary = self.run_batch(total=1, question_type="image")
+        event = next(e for e in self.events if e.get("stage") == "image")
+        self.assertEqual((event["model"], event["status"], event["attempts"], event["elapsedMs"]),
+                         ("test-image", "success", 1, 1))
+        progress = json.loads((Path(summary["batchDir"]) / "image_progress.json").read_text(encoding="utf-8"))
+        self.assertEqual(progress["questions"][0]["question"], summary["questions"][0]["question"])
+        self.assertNotIn("evidenceText", progress["questions"][0])
 
     def test_end_to_end(self):
         summary = self.run_batch()

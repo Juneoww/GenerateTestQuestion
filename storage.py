@@ -58,6 +58,11 @@ SETTINGS_DEFAULTS = {
     "baseUrl": "",
     "apiKey": "",
     "model": "",
+    "imageBaseUrl": "",
+    "imageApiKey": "",
+    "imageModel": "",
+    "imageTimeoutSeconds": 120,
+    "imageRetries": 2,
     "temperature": 0.7,
     "timeoutSeconds": 60,
     "retries": 2,
@@ -118,7 +123,7 @@ def load_settings(base_dir: Path | None = None) -> dict:
     except (TypeError, ValueError):
         merged["temperature"] = SETTINGS_DEFAULTS["temperature"]
     for key in ("timeoutSeconds", "retries", "maxQuestionsPerItem", "crawlDelayMs",
-                "requestTimeoutSeconds", "responseLimitMiB"):
+                "requestTimeoutSeconds", "responseLimitMiB", "imageTimeoutSeconds", "imageRetries"):
         try:
             merged[key] = max(0, int(merged[key]))
         except (TypeError, ValueError):

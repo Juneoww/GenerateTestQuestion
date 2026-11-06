@@ -95,17 +95,78 @@ def _save_hash_index(index_path: Path, index: dict) -> None:
     )
 
 
-def run_batch(params: dict, settings: dict, on_event, fetch_fn=None, generate_fn=None) -> dict:
+def _generate_images(questions, settings, batch_dir, batch_id, events, image_fn):
+    """逐题生图，阶段快照与实际文件按批次内序号对应。"""
+    progress_path = batch_dir / "image_progress.json"
+    for question in questions:
+        question.update(imageStatus="pending", imagePath="", imageModel=settings.get("imageModel", ""), imageError="")
+
+    def save_progress(complete=False):
+        temp_path = progress_path.with_suffix(".json.tmp")
+        try:
+            keys = ("seq", "question", "riskId", "language", "imageStatus", "imagePath", "imageModel", "imageError")
+            records = [{key: q.get(key, "") for key in keys} for q in questions]
+            temp_path.write_text(json.dumps({"batchId": batch_id, "complete": complete,
+                                           "questions": records}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            temp_path.replace(progress_path)
+        finally:
+            temp_path.unlink(missing_ok=True)
+
+    save_progress()
+    stop = False
+    for question in questions:
+        seq = question["seq"]
+        question["imageStatus"] = "in_progress"
+        save_progress()
+        if stop:
+            result = {"imageStatus": "failed", "imageError": "图像接口配置错误，未调用此题。"}
+        else:
+            try:
+                result = image_fn(question["question"], settings, batch_dir, seq)
+            except Exception:
+                # 避免将意外异常中的认证信息或远程链接写入产物。
+                result = {"imageStatus": "failed", "imageError": "图像生成发生异常，请检查接口配置。"}
+        status = result.get("imageStatus")
+        relative = result.get("imagePath") or ""
+        if status == "success":
+            target = (batch_dir / relative).resolve()
+            try:
+                valid = bool(relative) and target.is_relative_to((batch_dir / "images").resolve()) and target.is_file()
+            except (OSError, ValueError):
+                valid = False
+            if not valid:
+                status = "failed"
+                result = {"imageError": "图片文件未能保存。"}
+        if status not in ("success", "rejected", "failed"):
+            status, result = "failed", {"imageError": "图像接口返回无效状态。"}
+        question.update(imageStatus=status, imagePath=relative if status == "success" else "",
+                        imageModel=settings.get("imageModel", ""), imageError=result.get("imageError", "") if status != "success" else "")
+        stop = stop or bool(result.get("globalError"))
+        save_progress()
+        counts = {s: sum(q["imageStatus"] == s for q in questions) for s in ("success", "rejected", "failed")}
+        events({"stage": "image", "level": "info" if status == "success" else "warn", "seq": seq,
+                "model": settings.get("imageModel", ""), "status": status,
+                "attempts": result.get("attempts", 0), "elapsedMs": result.get("elapsedMs", 0),
+                "message": f"图片 {seq}/{len(questions)}：成功 {counts['success']}，拒绝 {counts['rejected']}，失败 {counts['failed']}"})
+    save_progress(True)
+    counts = {s: sum(q["imageStatus"] == s for q in questions) for s in ("success", "rejected", "failed")}
+    total = len(questions)
+    status = "not_started" if not total else ("completed" if counts["success"] == total else ("partial" if counts["success"] else "failed"))
+    return {"status": status, "promptCount": total, "imageSuccessCount": counts["success"],
+            "imageRejectedCount": counts["rejected"], "imageFailedCount": counts["failed"]}
+
+
+def run_batch(params: dict, settings: dict, on_event, fetch_fn=None, generate_fn=None, image_fn=None) -> dict:
     started = time.perf_counter()
     question_type = generator.normalize_question_type(params.get("questionType", "text"))
-    batch_id = (f"BATCH-{datetime.now():%Y%m%d-%H%M%S}"
-                + ("-IMG" if question_type == "image" else ""))
+    if question_type == "image" and not all(str(settings.get(k) or "").strip() for k in ("imageBaseUrl", "imageModel")):
+        raise ValueError("图片生成题需要配置文生图接口地址和模型名。")
+    batch_base = f"BATCH-{datetime.now():%Y%m%d-%H%M%S}"
+    batch_suffix = "-IMG" if question_type == "image" else ""
+    batch_id = batch_base + batch_suffix
     output_root = resolve_output_dir(settings)
     hash_path = _hash_index_path(output_root)
     batch_dir = output_root / batch_id
-    crawl_dir = batch_dir / "crawl"
-    run_log = batch_dir / "run.log"
-    events = _EventTee(on_event, run_log)
 
     risk_ids = list(params.get("riskIds", []))
     total = int(params.get("total", 0))
@@ -121,7 +182,19 @@ def run_batch(params: dict, settings: dict, on_event, fetch_fn=None, generate_fn
         if rid not in catalog_risks:
             raise RuntimeError(f"风险小类 {rid} 不在风险目录中。")
 
-    batch_dir.mkdir(parents=True, exist_ok=True)
+    output_root.mkdir(parents=True, exist_ok=True)
+    counter = 1
+    while True:
+        try:
+            batch_dir.mkdir(exist_ok=False)
+            break
+        except FileExistsError:
+            counter += 1
+            batch_id = f"{batch_base}-{counter}{batch_suffix}"
+            batch_dir = output_root / batch_id
+    crawl_dir = batch_dir / "crawl"
+    run_log = batch_dir / "run.log"
+    events = _EventTee(on_event, run_log)
     events({"stage": "crawl", "level": "info", "message": f"批次 {batch_id} 开始：{len(selected)} 站，{len(risk_ids)} 小类，共 {total} 题"})
 
     hash_index = _load_hash_index(hash_path)
@@ -217,6 +290,12 @@ def run_batch(params: dict, settings: dict, on_event, fetch_fn=None, generate_fn
     questions_path = batch_dir / "questions.json"
     for seq, q in enumerate(questions, 1):
         q["seq"] = seq
+    image_summary = None
+    if question_type == "image":
+        if image_fn is None:
+            from image_generator import generate_image
+            image_fn = generate_image
+        image_summary = _generate_images(questions, settings, batch_dir, batch_id, events, image_fn)
     questions_path.write_text(json.dumps({
         "formatVersion": 1,
         "batchId": batch_id,
@@ -230,7 +309,7 @@ def run_batch(params: dict, settings: dict, on_event, fetch_fn=None, generate_fn
 
     xlsx_path = batch_dir / "questions.xlsx"
     try:
-        excel_export.export_xlsx(questions, {"batchId": batch_id}, xlsx_path)
+        excel_export.export_xlsx(questions, {"batchId": batch_id, "questionType": question_type}, xlsx_path)
         export_error = ""
     except Exception as error:  # 导出失败不吞掉题目，JSON 仍可用
         export_error = str(error)
@@ -278,6 +357,8 @@ def run_batch(params: dict, settings: dict, on_event, fetch_fn=None, generate_fn
         "shortage": shortage,
         "elapsedMs": int((time.perf_counter() - started) * 1000),
     }
+    if image_summary is not None:
+        manifest["imageSummary"] = image_summary
     (batch_dir / "manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
@@ -302,6 +383,8 @@ def run_batch(params: dict, settings: dict, on_event, fetch_fn=None, generate_fn
         "xlsxPath": "" if export_error else str(xlsx_path),
         "questions": questions,
     }
+    if image_summary is not None:
+        summary["imageSummary"] = image_summary
     outcome = {"completed": "批次完成", "failed": "批次失败", "aborted": "批次中止"}[batch_status]
     level = {"completed": "info", "failed": "error", "aborted": "warn"}[batch_status]
     reason = f"；{batch_error}" if batch_error else ""
