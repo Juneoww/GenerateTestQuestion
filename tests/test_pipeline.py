@@ -83,6 +83,103 @@ class PipelineTests(unittest.TestCase):
         self.addCleanup(setattr, pipeline.storage, "load_sources", self.original_load)
         self.addCleanup(setattr, pipeline.crawler, "crawl_source", self.original_crawl)
 
+    def test_excel_export_failure_reports_error_and_preserves_json(self):
+        from unittest.mock import patch
+        with patch.object(pipeline.excel_export, "export_xlsx", side_effect=OSError("无法写入工作簿")):
+            summary = self.run_batch(total=1, zh_percent=100, risk_ids=["A1-01"])
+        self.assertIn("无法写入工作簿", summary["exportError"])
+        self.assertEqual(summary["xlsxPath"], "")
+        self.assertTrue(Path(summary["questionsPath"]).is_file())
+        manifest = json.loads((Path(summary["batchDir"]) / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["exportError"], summary["exportError"])
+
+    def test_text_images_are_real_files_and_embedded_in_excel(self):
+        from openpyxl import load_workbook
+        from PIL import Image
+        params = {"sourceIds": ["S1"], "riskIds": ["A1-01"], "total": 2,
+                  "zhPercent": 100, "questionType": "text", "textImageEnabled": True}
+        def render(question, destination, size, background_path=None):
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            Image.new("RGB", size, "white").save(destination)
+            return {"fontSize": 48, "fontName": "test", "textSha256": "digest"}
+        summary = pipeline.run_batch(params, dict(SETTINGS, imageBaseUrl="", imageModel="",
+                                     textImageSize="1280x1280"), self.events.append,
+                                     generate_fn=fake_generate, text_render_fn=render)
+        self.assertEqual(summary["textImageSummary"]["successCount"], 2)
+        self.assertEqual(summary["questions"][0]["questionType"], "text")
+        batch = Path(summary["batchDir"])
+        self.assertTrue((batch / summary["questions"][0]["textImagePath"]).is_file())
+        wb = load_workbook(batch / "questions.xlsx")
+        self.addCleanup(wb.close)
+        self.assertEqual(wb.active.cell(1, 14).value, "文字图片")
+        self.assertEqual(len(wb.active._images), 2)
+
+    def test_text_image_names_include_distinct_batch_id_even_with_same_clock(self):
+        from datetime import datetime
+        from unittest.mock import patch
+        from PIL import Image
+
+        class FixedClock(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return cls(2026, 11, 6, 15, 26, 17, tzinfo=tz)
+
+        params = {"sourceIds": ["S1"], "riskIds": ["A1-01"], "total": 1,
+                  "zhPercent": 100, "questionType": "text", "textImageEnabled": True}
+        def render(question, destination, size, background_path=None):
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            Image.new("RGB", size, "white").save(destination)
+            return {"fontSize": 48, "fontName": "test"}
+
+        with patch.object(pipeline, "datetime", FixedClock):
+            batches = [pipeline.run_batch(params, dict(SETTINGS, textImageSize="512x512"),
+                       self.events.append, generate_fn=fake_generate, text_render_fn=render)
+                       for _ in range(2)]
+        self.assertNotEqual(batches[0]["batchId"], batches[1]["batchId"])
+        names = []
+        for batch in batches:
+            relative = batch["questions"][0]["textImagePath"]
+            image = Path(batch["batchDir"]) / relative
+            self.assertEqual(image.name, f"{batch['batchId']}-0001.png")
+            self.assertTrue(image.is_file())
+            stored = json.loads((Path(batch["batchDir"]) / "questions.json").read_text(encoding="utf-8"))
+            progress = json.loads((Path(batch["batchDir"]) / "image_progress.json").read_text(encoding="utf-8"))
+            self.assertEqual(stored["questions"][0]["textImagePath"], relative)
+            self.assertEqual(progress["questions"][0]["textImagePath"], relative)
+            names.append(image.name)
+        self.assertNotEqual(*names)
+
+    def test_text_image_failure_keeps_question_and_reports_partial(self):
+        from PIL import Image
+        params = {"sourceIds": ["S1"], "riskIds": ["A1-01"], "total": 2,
+                  "zhPercent": 100, "questionType": "text", "textImageEnabled": True}
+        def render(question, destination, size, background_path=None):
+            if destination.name.endswith("-0002.png"):
+                raise ValueError("字体缺失")
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            Image.new("RGB", size, "white").save(destination)
+            return {"fontSize": 48, "fontName": "test"}
+        summary = pipeline.run_batch(params, dict(SETTINGS, textImageSize="512x512"), self.events.append,
+                                     generate_fn=fake_generate, text_render_fn=render)
+        self.assertEqual(summary["textImageSummary"]["status"], "partial")
+        self.assertEqual(summary["textImageSummary"]["failedCount"], 1)
+        self.assertIn("字体缺失", summary["questions"][1]["textImageError"])
+        progress = json.loads((Path(summary["batchDir"]) / "image_progress.json").read_text(encoding="utf-8"))
+        self.assertTrue(progress["complete"])
+
+    def test_invalid_managed_background_fails_before_crawl(self):
+        from unittest.mock import patch
+        managed = self.tmp / "background.png"
+        managed.write_bytes(b"bad")
+        params = {"sourceIds": ["S1"], "riskIds": ["A1-01"], "total": 1,
+                  "questionType": "text", "textImageEnabled": True}
+        with patch.object(pipeline.storage, "DATA_DIR", self.tmp), patch.object(pipeline.crawler, "crawl_source") as crawl:
+            with self.assertRaisesRegex(ValueError, "背景"):
+                pipeline.run_batch(params, dict(SETTINGS, textImageSize="512x512",
+                                   textImageBackgroundPath="background.png", textImageBackgroundSha256="invalid"),
+                                   self.events.append, generate_fn=fake_generate)
+            crawl.assert_not_called()
+
     def run_batch(self, generate_fn=fake_generate, total=3, zh_percent=67, risk_ids=None,
                   question_type="text", image_fn=None):
         params = {"sourceIds": ["S1", "S2"], "riskIds": risk_ids or ["A1-01", "A1-02"],

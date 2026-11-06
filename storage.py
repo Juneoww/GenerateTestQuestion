@@ -12,9 +12,15 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import io
+import os
 import shutil
 import sys
+import tempfile
 from pathlib import Path
+
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 
 def _app_root() -> Path:
@@ -26,7 +32,9 @@ def _app_root() -> Path:
 
 PROJECT_ROOT = _app_root()
 DATA_DIR = PROJECT_ROOT / "data"
-APP_VERSION = "4.0.0"  # 发版时与 GitHub Releases 的 tag 同步修改
+APP_VERSION = "4.1.0"  # 发版时与 GitHub Releases 的 tag 同步修改
+
+TEXT_IMAGE_SIZES = ("512x512", "1024x1024", "1280x1280", "1024x768", "1920x1080", "768x1024", "1080x1920")
 
 if getattr(sys, "frozen", False) and not DATA_DIR.exists():
     # 首次运行：把随包内置的来源清单/风险目录释放到 exe 旁边。
@@ -71,9 +79,55 @@ SETTINGS_DEFAULTS = {
     "requestTimeoutSeconds": 15,
     "responseLimitMiB": 2,
     "outputDir": "",
+    "textImageSize": "1280x1280",
+    "textImageBackgroundPath": "",
+    "textImageBackgroundSha256": "",
     # 上次出题用的题目形式（"text" 文本对话题 / "image" 图片生成题），生成页单选的记忆值
     "questionType": "text",
 }
+
+
+def import_text_image_background(source: Path, base_dir: Path | None = None) -> dict:
+    """验证并去除元数据后存储用户选择的背景，返回受管相对路径和哈希。"""
+    source = Path(source)
+    root = base_dir or DATA_DIR
+    try:
+        if source.stat().st_size > 20 * 1024 * 1024:
+            raise ValueError("背景图片不能超过 20 MiB")
+        with Image.open(source) as img:
+            if img.format not in ("PNG", "JPEG", "WEBP"):
+                raise ValueError("仅支持 PNG、JPEG、WebP 图片")
+            if img.width * img.height > 40_000_000:
+                raise ValueError("背景图片像素过大")
+            img = ImageOps.exif_transpose(img)
+            img.load()
+            if img.mode in ("RGBA", "LA") or "transparency" in img.info:
+                rgba = img.convert("RGBA")
+                normalized = Image.new("RGB", rgba.size, "white")
+                normalized.paste(rgba, mask=rgba.getchannel("A"))
+            else:
+                normalized = img.convert("RGB")
+            normalized.info.clear()  # 禁止把原图 EXIF 等元数据带入受管副本。
+            buffer = io.BytesIO()
+            normalized.save(buffer, format="PNG")
+    except (OSError, UnidentifiedImageError, Image.DecompressionBombError) as error:
+        raise ValueError("背景图片无法读取或已损坏") from error
+    payload = buffer.getvalue()
+    digest = hashlib.sha256(payload).hexdigest()
+    relative = Path("text-image-backgrounds") / f"{digest}.png"
+    destination = root / relative
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if not destination.exists() or hashlib.sha256(destination.read_bytes()).hexdigest() != digest:
+        temp_name = None
+        try:
+            with tempfile.NamedTemporaryFile(dir=destination.parent, suffix=".tmp", delete=False) as tmp:
+                temp_name = tmp.name
+                tmp.write(payload)
+            os.replace(temp_name, destination)
+        finally:
+            if temp_name and os.path.exists(temp_name):
+                os.unlink(temp_name)
+    return {"textImageBackgroundPath": relative.as_posix(), "textImageBackgroundSha256": digest}
 
 
 def _read_json(path: Path, default):
@@ -135,7 +189,22 @@ def load_settings(base_dir: Path | None = None) -> dict:
 
 def save_settings(patch: dict, base_dir: Path | None = None) -> dict:
     merged = {**load_settings(base_dir), **{k: v for k, v in patch.items() if k in SETTINGS_DEFAULTS}}
-    _write_json((base_dir or DATA_DIR) / "settings.json", merged)
+    path = (base_dir or DATA_DIR) / "settings.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_name = None
+    try:
+        # 先写同目录临时文件，完整写入后再替换，防止写入失败破坏原设置。
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                                         prefix=".settings-", suffix=".tmp", delete=False) as tmp:
+            temp_name = tmp.name
+            tmp.write(json.dumps(merged, ensure_ascii=False, indent=2) + "\n")
+        os.replace(temp_name, path)
+    finally:
+        if temp_name and os.path.exists(temp_name):
+            try:
+                os.unlink(temp_name)
+            except OSError:
+                pass
     return load_settings(base_dir)  # 回读以完成类型强转
 
 

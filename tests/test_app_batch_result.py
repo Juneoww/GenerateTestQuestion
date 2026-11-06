@@ -98,6 +98,20 @@ class BatchResultUiTests(unittest.TestCase):
         self.window._on_question_selected()
         self.assertIn("images/0001.png", self.window.detail_text.get("1.0", "end-1c"))
 
+    def test_excel_export_error_warns_for_text_and_image_batches(self):
+        for image_summary in (None, {"status": "completed", "successCount": 1, "failedCount": 0}):
+            with self.subTest(images=image_summary is not None):
+                summary = {**self.summary, "status": "completed", "error": "", "questions": [self.question],
+                           "questionCount": 1, "zhCount": 1, "xlsxPath": "", "questionsPath": "test-batch/questions.json",
+                           "exportError": "文件被占用", "textImageSummary": image_summary}
+                with patch.object(app.messagebox, "showwarning") as warning, patch.object(app.messagebox, "showinfo") as info:
+                    self.window._finish_batch({"ok": True, "summary": summary})
+                warning.assert_called_once()
+                self.assertIn("Excel", warning.call_args.args[1])
+                self.assertIn("JSON", warning.call_args.args[1])
+                self.assertTrue(self.window.open_xlsx_button.instate(["disabled"]))
+                info.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

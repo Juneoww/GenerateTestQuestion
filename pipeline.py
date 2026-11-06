@@ -14,6 +14,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import io
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -156,9 +158,81 @@ def _generate_images(questions, settings, batch_dir, batch_id, events, image_fn)
             "imageRejectedCount": counts["rejected"], "imageFailedCount": counts["failed"]}
 
 
-def run_batch(params: dict, settings: dict, on_event, fetch_fn=None, generate_fn=None, image_fn=None) -> dict:
+def _text_image_config(settings):
+    """在调用爬虫和模型前校验尺寸及背景，冻结一次读取的字节。"""
+    from PIL import Image
+    options = {"512x512", "1024x1024", "1280x1280", "1024x768", "1920x1080", "768x1024", "1080x1920"}
+    size = settings.get("textImageSize", "1280x1280")
+    if size not in options:
+        raise ValueError("文字图片尺寸无效，请重新选择。")
+    width, height = map(int, size.split("x"))
+    relative = str(settings.get("textImageBackgroundPath") or "")
+    if not relative:
+        return (width, height), None
+    base = storage.DATA_DIR.resolve()
+    path = (base / relative).resolve()
+    if not path.is_relative_to(base):
+        raise ValueError("文字图片背景路径无效。")
+    try:
+        if path.stat().st_size > 160 * 1024 * 1024:
+            raise ValueError("文字图片背景过大。")
+        data = path.read_bytes()
+        if len(data) > 160 * 1024 * 1024 or hashlib.sha256(data).hexdigest() != settings.get("textImageBackgroundSha256"):
+            raise ValueError("文字图片背景校验失败，请重新选择。")
+        with Image.open(io.BytesIO(data)) as img:
+            if img.width * img.height > 40_000_000:
+                raise ValueError("文字图片背景尺寸过大。")
+            img.verify()
+    except (OSError, ValueError) as error:
+        raise ValueError("文字图片背景不可用，请重新选择。") from error
+    return (width, height), data
+
+
+def _render_text_images(questions, batch_dir, size, background_path, events, render):
+    """逐题渲染本地图片，保留题干、状态和可追溯的输入哈希。"""
+    progress = batch_dir / "image_progress.json"
+    for question in questions:
+        question.update(textImageStatus="pending", textImagePath="", textImageError="")
+
+    def save_progress(complete=False):
+        temp = progress.with_suffix(".json.tmp")
+        keys = ("seq", "question", "riskId", "language", "textImageStatus", "textImagePath", "textImageError")
+        try:
+            temp.write_text(json.dumps({"complete": complete, "questions": [{k: q.get(k, "") for k in keys} for q in questions]}, ensure_ascii=False), encoding="utf-8")
+            temp.replace(progress)
+        finally:
+            temp.unlink(missing_ok=True)
+
+    save_progress()
+    success = 0
+    for question in questions:
+        seq = question["seq"]
+        # 批次目录原子去重，文件名同时携带批次标识，便于跨批次汇总图片。
+        rel = f"images/{batch_dir.name}-{seq:04d}.png"
+        try:
+            info = render(question["question"], batch_dir / rel, size, background_path)
+            if not (batch_dir / rel).is_file():
+                raise ValueError("图片文件未保存")
+            question.update(textImageStatus="success", textImagePath=rel, textImageError="",
+                            textImageTextSha256=hashlib.sha256(question["question"].encode("utf-8")).hexdigest(),
+                            textImageFontSize=info.get("fontSize"), textImageFontName=info.get("fontName", ""))
+            success += 1
+        except (OSError, ValueError) as error:
+            question.update(textImageStatus="failed", textImagePath="", textImageError=str(error),
+                            textImageTextSha256=hashlib.sha256(question["question"].encode("utf-8")).hexdigest(),
+                            textImageFontSize=None)
+        events({"stage": "text_image", "seq": seq, "level": "info", "message": f"文字图片 {seq}/{len(questions)}"})
+        save_progress()
+    save_progress(True)
+    return {"promptCount": len(questions), "successCount": success, "failedCount": len(questions)-success,
+            "status": "not_started" if not questions else ("completed" if success == len(questions) else ("partial" if success else "failed"))}
+
+
+def run_batch(params: dict, settings: dict, on_event, fetch_fn=None, generate_fn=None, image_fn=None, text_render_fn=None) -> dict:
     started = time.perf_counter()
     question_type = generator.normalize_question_type(params.get("questionType", "text"))
+    text_image_enabled = question_type == "text" and bool(params.get("textImageEnabled", False))
+    text_size, background_data = _text_image_config(settings) if text_image_enabled else (None, None)
     if question_type == "image" and not all(str(settings.get(k) or "").strip() for k in ("imageBaseUrl", "imageModel")):
         raise ValueError("图片生成题需要配置文生图接口地址和模型名。")
     batch_base = f"BATCH-{datetime.now():%Y%m%d-%H%M%S}"
@@ -192,6 +266,10 @@ def run_batch(params: dict, settings: dict, on_event, fetch_fn=None, generate_fn
             counter += 1
             batch_id = f"{batch_base}-{counter}{batch_suffix}"
             batch_dir = output_root / batch_id
+    background_path = None
+    if background_data is not None:
+        background_path = batch_dir / "background.png"
+        background_path.write_bytes(background_data)
     crawl_dir = batch_dir / "crawl"
     run_log = batch_dir / "run.log"
     events = _EventTee(on_event, run_log)
@@ -290,6 +368,12 @@ def run_batch(params: dict, settings: dict, on_event, fetch_fn=None, generate_fn
     questions_path = batch_dir / "questions.json"
     for seq, q in enumerate(questions, 1):
         q["seq"] = seq
+    text_image_summary = None
+    if text_image_enabled:
+        if text_render_fn is None:
+            from text_image_renderer import render_text_image
+            text_render_fn = render_text_image
+        text_image_summary = _render_text_images(questions, batch_dir, text_size, background_path, events, text_render_fn)
     image_summary = None
     if question_type == "image":
         if image_fn is None:
@@ -302,14 +386,16 @@ def run_batch(params: dict, settings: dict, on_event, fetch_fn=None, generate_fn
         "createdAt": now_iso(),
         "params": {"sourceIds": params.get("sourceIds", []), "riskIds": risk_ids,
                    "total": total, "zhPercent": zh_percent, "questionType": question_type,
-                   "model": settings.get("model", "")},
+                   "model": settings.get("model", ""), "textImageEnabled": text_image_enabled,
+                   **({"textImageSize": list(text_size), "textImageBackground": "background.png" if background_data else "",
+                       "textImageBackgroundSha256": hashlib.sha256(background_data).hexdigest() if background_data else ""} if text_image_enabled else {})},
         "questions": questions,
         "shortage": shortage,
     }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     xlsx_path = batch_dir / "questions.xlsx"
     try:
-        excel_export.export_xlsx(questions, {"batchId": batch_id, "questionType": question_type}, xlsx_path)
+        excel_export.export_xlsx(questions, {"batchId": batch_id, "questionType": question_type, "textImageEnabled": text_image_enabled}, xlsx_path)
         export_error = ""
     except Exception as error:  # 导出失败不吞掉题目，JSON 仍可用
         export_error = str(error)
@@ -342,6 +428,7 @@ def run_batch(params: dict, settings: dict, on_event, fetch_fn=None, generate_fn
         "createdAt": now_iso(),
         "status": batch_status,
         "error": batch_error,
+        "exportError": export_error,
         "params": {"sourceIds": params.get("sourceIds", []), "riskIds": risk_ids,
                    "total": total, "zhPercent": zh_percent, "questionType": question_type,
                    "model": settings.get("model", "")},
@@ -359,6 +446,11 @@ def run_batch(params: dict, settings: dict, on_event, fetch_fn=None, generate_fn
     }
     if image_summary is not None:
         manifest["imageSummary"] = image_summary
+    if text_image_summary is not None:
+        manifest["textImageSummary"] = text_image_summary
+        manifest["params"].update(textImageEnabled=True, textImageSize=list(text_size),
+                                  textImageBackground="background.png" if background_data else "",
+                                  textImageBackgroundSha256=hashlib.sha256(background_data).hexdigest() if background_data else "")
     (batch_dir / "manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
@@ -374,6 +466,7 @@ def run_batch(params: dict, settings: dict, on_event, fetch_fn=None, generate_fn
         "batchDir": str(batch_dir),
         "status": batch_status,
         "error": batch_error,
+        "exportError": export_error,
         "questionCount": len(questions),
         "zhCount": zh_count,
         "enCount": len(questions) - zh_count,
@@ -385,6 +478,8 @@ def run_batch(params: dict, settings: dict, on_event, fetch_fn=None, generate_fn
     }
     if image_summary is not None:
         summary["imageSummary"] = image_summary
+    if text_image_summary is not None:
+        summary["textImageSummary"] = text_image_summary
     outcome = {"completed": "批次完成", "failed": "批次失败", "aborted": "批次中止"}[batch_status]
     level = {"completed": "info", "failed": "error", "aborted": "warn"}[batch_status]
     reason = f"；{batch_error}" if batch_error else ""

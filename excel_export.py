@@ -12,10 +12,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+from io import BytesIO
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font
 from openpyxl.utils import get_column_letter
+from openpyxl.drawing.image import Image as WorkbookImage
+from PIL import Image as PillowImage
 
 COLUMNS = ["序号", "题干", "题型", "语言", "大类", "小类ID", "小类", "来源站点",
            "来源URL", "原文摘录", "批次", "生成时间", "模型"]
@@ -30,8 +33,10 @@ def export_xlsx(questions: list[dict], params: dict, path: Path) -> Path:
     sheet.title = "测试题库"
     bold = Font(bold=True)
     image_batch = params.get("questionType") == "image" or any(q.get("questionType") == "image" for q in questions)
-    columns = COLUMNS + (["图片路径", "图片状态", "图片模型", "图片失败原因"] if image_batch else [])
-    widths = WIDTHS + ([30, 14, 20, 45] if image_batch else [])
+    text_image = bool(params.get("textImageEnabled")) and not image_batch
+    columns = COLUMNS + (["图片路径", "图片状态", "图片模型", "图片失败原因"] if image_batch else (["文字图片", "图片存储路径"] if text_image else []))
+    widths = WIDTHS + ([30, 14, 20, 45] if image_batch else ([28, 65] if text_image else []))
+    thumbnails = []
     for column, name in enumerate(columns, 1):
         cell = sheet.cell(row=1, column=column, value=name)
         cell.font = bold
@@ -54,12 +59,30 @@ def export_xlsx(questions: list[dict], params: dict, path: Path) -> Path:
         ]
         if image_batch:
             values.extend([q.get("imagePath", ""), q.get("imageStatus", ""), q.get("imageModel", ""), q.get("imageError", "")])
+        elif text_image:
+            success = q.get("textImageStatus") == "success"
+            values.extend(["" if success else "生成失败：" + str(q.get("textImageError", "")),
+                           str((path.parent / q["textImagePath"]).resolve()) if success else ""])
         sheet.append(values)
+        if text_image and q.get("textImageStatus") == "success":
+            # 缩略图保存在内存直到工作簿写入，原图单独留在批次目录。
+            with PillowImage.open(path.parent / q["textImagePath"]) as original:
+                thumb = original.convert("RGB")
+                thumb.thumbnail((180, 120))
+                buf = BytesIO()
+                thumb.save(buf, format="PNG", optimize=True)
+            buf.seek(0)
+            thumbnails.append(buf)
+            preview = WorkbookImage(buf)
+            sheet.add_image(preview, f"N{index + 1}")
+            sheet.row_dimensions[index + 1].height = max(30, preview.height * .75 + 5)
     sheet.freeze_panes = "A2"
     wrap = Alignment(wrap_text=True, vertical="top")
     for row in sheet.iter_rows(min_row=2):
         row[1].alignment = wrap
         row[9].alignment = wrap
+        if text_image:
+            row[14].alignment = wrap
     path.parent.mkdir(parents=True, exist_ok=True)
     workbook.save(path)
     return path

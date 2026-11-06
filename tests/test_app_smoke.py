@@ -30,7 +30,7 @@ class SmokeTests(unittest.TestCase):
 
     def test_smoke_test_payload(self):
         result = app.smoke_test()
-        self.assertEqual(result["version"], "4.0.0")
+        self.assertEqual(result["version"], "4.1.0")
         self.assertTrue(result["desktopReady"])
         self.assertEqual(result["workspaces"], ["生成", "OWASP 红队提示词", "OWASP Agentic 题集", "来源管理", "设置"])
         self.assertEqual(result["catalog"], {"scenes": 5, "risks": 31})

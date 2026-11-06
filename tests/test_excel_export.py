@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from openpyxl import load_workbook
+from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -52,6 +53,29 @@ class ExcelExportTests(unittest.TestCase):
         for row, evidence_text in enumerate(evidence_texts, start=2):
             self.assertEqual(sheet.cell(row=row, column=10).value, evidence_text)
             self.assertTrue(sheet.cell(row=row, column=10).alignment.wrap_text)
+
+    def test_text_image_export_has_absolute_file_path_and_failed_rows_empty(self):
+        images = self.path.parent / "images"
+        images.mkdir()
+        image_path = images / "BATCH-example-0001.png"
+        Image.new("RGB", (64, 64), "white").save(image_path)
+        questions = [
+            {"question": "第一题", "questionType": "text", "textImageStatus": "success",
+             "textImagePath": "images/BATCH-example-0001.png"},
+            {"question": "第二题", "questionType": "text", "textImageStatus": "failed",
+             "textImagePath": "", "textImageError": "无法生成"},
+        ]
+        excel_export.export_xlsx(questions, {"batchId": "BATCH-example", "textImageEnabled": True}, self.path)
+        workbook = load_workbook(self.path)
+        self.addCleanup(workbook.close)
+        sheet = workbook["测试题库"]
+        self.assertEqual(sheet.max_column, 15)
+        self.assertEqual(sheet.cell(1, 14).value, "文字图片")
+        self.assertEqual(sheet.cell(1, 15).value, "图片存储路径")
+        self.assertEqual(sheet.cell(2, 15).value, str(image_path.resolve()))
+        self.assertIsNone(sheet.cell(3, 15).value)
+        self.assertEqual(len(sheet._images), 1)
+        self.assertEqual(sheet._images[0].anchor._from.row, 1)
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ data/_legacy/
 data/output/
 data/reports/
 data/settings.json
+data/text-image-backgrounds/
 data/corpus/
 
 # 会话/工具记忆

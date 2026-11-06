@@ -102,7 +102,7 @@ class ImageSettingsTests(unittest.TestCase):
             window.attributes("-alpha", 0)
             tabs = window.settings_notebook.tabs()
             self.assertEqual([window.settings_notebook.tab(tab, "text") for tab in tabs],
-                             ["文字模型", "文生图模型", "通用设置"])
+                             ["文字模型", "文生图模型", "通用设置", "文字图片"])
             window.setting_vars["baseUrl"].set("https://text/v1")
             window.setting_vars["imageBaseUrl"].set("https://image/v1")
             window.settings_notebook.select(tabs[1])

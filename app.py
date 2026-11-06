@@ -20,6 +20,7 @@ import os
 import queue
 import sys
 import tempfile
+from PIL import Image, ImageOps, ImageTk
 import threading
 import webbrowser
 from datetime import datetime
@@ -261,6 +262,7 @@ class DesktopApplication(tk.Tk):
         options = ttk.LabelFrame(page, text="3. 本次生成", style="Card.TLabelframe")
         options.pack(fill=X, pady=(8, 0))
         self.question_type_var = tk.StringVar(value=storage.load_settings().get("questionType", "text"))
+        self.text_image_enabled_var = tk.BooleanVar(value=False)
         self.total_var = tk.StringVar(value="50")
         self.zh_var = tk.StringVar(value="80")
         mode_row = ttk.Frame(options)
@@ -274,6 +276,8 @@ class DesktopApplication(tk.Tk):
             mode_row, text="图片生成题（测文生图模型）", value="image",
             variable=self.question_type_var, command=self._update_selection_summary)
         self.image_mode_radio.pack(side=LEFT, padx=(18, 0))
+        self.text_image_check = ttk.Checkbutton(mode_row, text="同时生成文字图片", variable=self.text_image_enabled_var)
+        self.text_image_check.pack(side=LEFT, padx=(18, 0))
         ttk.Label(options, text="生成数量").grid(row=1, column=0, sticky=W, padx=(0, 4), pady=4)
         total_spin = ttk.Spinbox(options, from_=1, to=1000, textvariable=self.total_var, width=8)
         total_spin.grid(row=1, column=1, sticky=W, padx=(0, 14))
@@ -291,7 +295,7 @@ class DesktopApplication(tk.Tk):
         self.go_hint = ttk.Label(options, text="", style="Subtle.TLabel")
         self.go_hint.grid(row=2, column=0, columnspan=7, sticky=W, pady=(0, 2))
         self._generate_widgets = [total_spin, zh_spin, self.text_mode_radio,
-                                  self.image_mode_radio, self.start_button]
+                                  self.image_mode_radio, self.text_image_check, self.start_button]
 
         # 两个区块各自保留阅读高度，让外层 Canvas 承担页面溢出，不再靠拖分隔条分配空间。
         log_frame = ttk.LabelFrame(page, text="4. 运行日志", style="Card.TLabelframe")
@@ -860,6 +864,7 @@ class DesktopApplication(tk.Tk):
         self._update_selection_summary()
 
     def _update_selection_summary(self) -> None:
+        self.text_image_check.state(["disabled"] if self.running or self.question_type_var.get() != "text" else ["!disabled"])
         site_total, risk_total = len(self.site_vars), len(self.risk_vars)
         site_n = sum(1 for v in self.site_vars.values() if v.get())
         risk_n = sum(1 for v in self.risk_vars.values() if v.get())
@@ -928,7 +933,8 @@ class DesktopApplication(tk.Tk):
             messagebox.showwarning("缺少文生图模型配置", "请先到“设置 → 文生图模型”填写接口地址和模型名。", parent=self)
             return
         params = {"sourceIds": site_ids, "riskIds": risk_ids, "total": total, "zhPercent": zh_percent,
-                  "questionType": question_type}
+                  "questionType": question_type,
+                  "textImageEnabled": question_type == "text" and self.text_image_enabled_var.get()}
         storage.save_settings({"questionType": question_type})  # 记住本次的题目形式
         self.running = True
         self._sync_generation_busy()
@@ -953,6 +959,8 @@ class DesktopApplication(tk.Tk):
         self._sync_generation_busy()
         for widget in self._generate_widgets:
             widget.state(["!disabled"])
+        if self.question_type_var.get() != "text":
+            self.text_image_check.state(["disabled"])
         for widget in self._owasp_generate_widgets:
             widget.state(["!disabled"])
         self._update_owasp_selection_summary()
@@ -975,8 +983,19 @@ class DesktopApplication(tk.Tk):
             image_note = (f"\n图片：成功 {image_summary.get('imageSuccessCount', 0)}，"
                           f"拒绝 {image_summary.get('imageRejectedCount', 0)}，"
                           f"失败 {image_summary.get('imageFailedCount', 0)}")
+        text_image_summary = summary.get("textImageSummary")
+        if text_image_summary:
+            image_note = (f"\n文字图片：成功 {text_image_summary.get('successCount', 0)}，"
+                          f"失败 {text_image_summary.get('failedCount', 0)}")
         self._set_status(f"批次 {summary['batchId']} {outcome}：{summary['questionCount']} 题"
                          f"（中 {summary['zhCount']} / 英 {summary['enCount']}）" + image_note.replace("\n", "；"))
+        if summary.get("exportError"):
+            self._set_status(f"批次 {summary['batchId']}：Excel 导出失败")
+            reason = f"\n批次状态：{outcome}；{summary.get('error')}" if summary.get("error") else ""
+            messagebox.showwarning("Excel 导出失败",
+                                   f"Excel 导出失败：{summary['exportError']}{reason}{image_note}\n"
+                                   f"已有 JSON 和图片可在批次目录查看：{self.current_batch_dir}", parent=self)
+            return
         if batch_status == "failed":
             messagebox.showerror("生成失败", f"{summary.get('error') or '本批次未生成有效题目。'}\n\n"
                                  f"批次与日志已保留：{self.current_batch_dir}{image_note}", parent=self)
@@ -993,6 +1012,9 @@ class DesktopApplication(tk.Tk):
             messagebox.showwarning("图片未全部生成",
                                    f"批次 {summary['batchId']}\n提示词 {summary['questionCount']} 条{image_note}\n"
                                    f"批次与日志：{self.current_batch_dir}", parent=self)
+            return
+        if text_image_summary and text_image_summary.get("failedCount", 0):
+            messagebox.showwarning("文字图片未全部生成", f"{image_note}\n批次与日志：{self.current_batch_dir}", parent=self)
             return
         messagebox.showinfo("生成完成",
                             f"批次 {summary['batchId']}\n产出 {summary['questionCount']} 题"
@@ -1256,7 +1278,8 @@ class DesktopApplication(tk.Tk):
         text_frame = ttk.Frame(self.settings_notebook, padding=10)
         image_frame = ttk.Frame(self.settings_notebook, padding=10)
         common_frame = ttk.Frame(self.settings_notebook, padding=10)
-        for pane, title in ((text_frame, "文字模型"), (image_frame, "文生图模型"), (common_frame, "通用设置")):
+        text_image_frame = ttk.Frame(self.settings_notebook, padding=10)
+        for pane, title in ((text_frame, "文字模型"), (image_frame, "文生图模型"), (common_frame, "通用设置"), (text_image_frame, "文字图片")):
             self.settings_notebook.add(pane, text=title)
         self.setting_vars = {
             "baseUrl": tk.StringVar(), "apiKey": tk.StringVar(), "model": tk.StringVar(),
@@ -1266,6 +1289,8 @@ class DesktopApplication(tk.Tk):
             "retries": tk.StringVar(), "maxQuestionsPerItem": tk.StringVar(),
             "crawlDelayMs": tk.StringVar(), "requestTimeoutSeconds": tk.StringVar(),
             "outputDir": tk.StringVar(),
+            "textImageSize": tk.StringVar(), "textImageBackgroundPath": tk.StringVar(),
+            "textImageBackgroundSha256": tk.StringVar(),
         }
         groups = ((text_frame, {
             "baseUrl": "接口地址（含 /v1 等版本号）", "apiKey": "API Key", "model": "模型名",
@@ -1294,6 +1319,21 @@ class DesktopApplication(tk.Tk):
         ttk.Label(common_frame, text="TC260 产物存入 BATCH-…；LLM 提示词存入 OWASP-…；Agentic 存入 AGENTIC-…；"
                               "留空则使用程序目录 data\\output。", style="Subtle.TLabel").grid(
             row=3, column=0, columnspan=3, sticky=W, padx=8, pady=(0, 6))
+        self._pending_text_background = None
+        self._background_preview = None
+        self.background_name = tk.StringVar(value="白色背景")
+        ttk.Label(text_image_frame, text="图片尺寸（像素）").grid(row=0, column=0, sticky=W, padx=8, pady=5)
+        self.text_image_size_combo = ttk.Combobox(text_image_frame, textvariable=self.setting_vars["textImageSize"],
+                                                  values=storage.TEXT_IMAGE_SIZES, state="readonly", width=22)
+        self.text_image_size_combo.grid(row=0, column=1, sticky=W, pady=5)
+        ttk.Label(text_image_frame, text="背景图片").grid(row=1, column=0, sticky=W, padx=8, pady=5)
+        ttk.Label(text_image_frame, textvariable=self.background_name).grid(row=1, column=1, sticky=W)
+        ttk.Button(text_image_frame, text="浏览…", command=self._pick_text_background).grid(row=1, column=2, padx=6)
+        ttk.Button(text_image_frame, text="清除背景", command=self._clear_text_background).grid(row=1, column=3)
+        self.background_preview_label = ttk.Label(text_image_frame)
+        self.background_preview_label.grid(row=2, column=1, sticky=W, pady=8)
+        ttk.Label(text_image_frame, text="选定背景保存在本机；文字图片默认使用白底。", style="Subtle.TLabel").grid(
+            row=3, column=0, columnspan=4, sticky=W, padx=8, pady=4)
         buttons = ttk.Frame(self.settings_tab)
         buttons.pack(fill=X, pady=(10, 0))
         ttk.Button(buttons, text="保存设置", command=self._save_settings).pack(side=LEFT)
@@ -1305,6 +1345,38 @@ class DesktopApplication(tk.Tk):
         settings = storage.load_settings()
         for key, variable in self.setting_vars.items():
             variable.set(str(settings.get(key, "")))
+        relative = settings.get("textImageBackgroundPath", "")
+        if relative:
+            self.background_name.set("已保存背景")
+            self._show_text_background(storage.DATA_DIR / relative)
+
+    def _show_text_background(self, path: Path) -> None:
+        try:
+            if path.stat().st_size > 100 * 1024 * 1024:
+                raise ValueError("图片过大")
+            with Image.open(path) as image:
+                if image.width * image.height > 40_000_000:
+                    raise ValueError("图片像素过大")
+                preview = ImageOps.exif_transpose(image).convert("RGB")
+                preview.thumbnail((220, 130))
+                self._background_preview = ImageTk.PhotoImage(preview)
+            self.background_preview_label.configure(image=self._background_preview)
+        except (OSError, ValueError, Image.DecompressionBombError):
+            self._background_preview = None
+            self.background_preview_label.configure(image="")
+
+    def _pick_text_background(self) -> None:
+        chosen = filedialog.askopenfilename(parent=self, title="选择背景图片", filetypes=[("图片", "*.png *.jpg *.jpeg *.webp")])
+        if chosen:
+            self._pending_text_background = chosen
+            self.background_name.set(Path(chosen).name)
+            self._show_text_background(Path(chosen))
+
+    def _clear_text_background(self) -> None:
+        self._pending_text_background = ""
+        self.background_name.set("白色背景")
+        self._background_preview = None
+        self.background_preview_label.configure(image="")
 
     def _pick_output_dir(self) -> None:
         current = self.setting_vars["outputDir"].get().strip()
@@ -1332,6 +1404,18 @@ class DesktopApplication(tk.Tk):
         except ValueError:
             messagebox.showwarning("格式错误", "数值字段必须填写数字。", parent=self)
             return
+        if patch["textImageSize"] not in storage.TEXT_IMAGE_SIZES:
+            messagebox.showwarning("图片尺寸错误", "请在文字图片设置中选择有效的尺寸。", parent=self)
+            return
+        if self._pending_text_background is not None:
+            if not self._pending_text_background:
+                patch.update(textImageBackgroundPath="", textImageBackgroundSha256="")
+            else:
+                try:
+                    patch.update(storage.import_text_image_background(Path(self._pending_text_background)))
+                except (ValueError, OSError) as error:
+                    messagebox.showerror("背景图片无效", str(error), parent=self)
+                    return
         raw_dir = str(patch.get("outputDir", "")).strip()
         if raw_dir:
             out_path = Path(raw_dir)
@@ -1343,7 +1427,14 @@ class DesktopApplication(tk.Tk):
                 messagebox.showerror("产物路径无效", f"无法创建目录 {out_path}：{error}", parent=self)
                 return
             patch["outputDir"] = str(out_path)
-        merged = storage.save_settings(patch)
+        try:
+            merged = storage.save_settings(patch)
+        except OSError:
+            messagebox.showerror("保存失败", "无法保存设置，请检查目录权限和磁盘空间后重试。", parent=self)
+            return
+        self._pending_text_background = None
+        self.setting_vars["textImageBackgroundPath"].set(merged.get("textImageBackgroundPath", ""))
+        self.setting_vars["textImageBackgroundSha256"].set(merged.get("textImageBackgroundSha256", ""))
         self._set_status("设置已保存")
         selected_tab = self.settings_notebook.index(self.settings_notebook.select())
         if selected_tab == 0:
