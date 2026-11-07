@@ -2,6 +2,7 @@
 import hashlib
 from pathlib import Path
 import struct
+import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -13,6 +14,22 @@ import text_image_renderer as renderer
 
 
 class TextImageRendererTests(unittest.TestCase):
+    def test_frozen_bundled_font_preferred_without_system_fonts(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            bundled = root / 'assets' / 'fonts' / 'NotoSansSC-VF.ttf'
+            bundled.parent.mkdir(parents=True)
+            bundled.write_bytes(b'placeholder')
+            with mock.patch.object(sys, '_MEIPASS', str(root), create=True), \
+                 mock.patch.dict('os.environ', {'WINDIR': str(root / 'absent')}):
+                self.assertEqual(renderer._font_path(), bundled)
+
+    def test_bundled_variable_font_uses_regular_weight(self):
+        font = mock.Mock()
+        with mock.patch.object(renderer.ImageFont, 'truetype', return_value=font):
+            self.assertIs(renderer._load_font(Path('NotoSansSC-VF.ttf'), 48), font)
+        font.set_variation_by_name.assert_called_once_with('Regular')
+
     def test_white_image_saves_exact_dimensions_and_text_hash(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'image.png'

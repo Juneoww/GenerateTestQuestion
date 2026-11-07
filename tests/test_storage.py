@@ -70,6 +70,54 @@ class StorageTests(unittest.TestCase):
         codes = sorted({r["sceneCode"] for r in risks})
         self.assertEqual(codes, ["A.1", "A.2", "A.3", "A.4", "A.5"])
 
+    def test_frozen_resources_initialize_empty_directory_without_settings(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            bundled = root / "bundle"
+            bundled.mkdir()
+            (bundled / "sources.json").write_text("sources", encoding="utf-8")
+            (bundled / "risk_catalog.json").write_text("risks", encoding="utf-8")
+            (bundled / "settings.json").write_text("do-not-copy", encoding="utf-8")
+            target = root / "app" / "data"
+
+            storage._initialize_bundled_data(target, bundled)
+
+            self.assertEqual((target / "sources.json").read_text(encoding="utf-8"), "sources")
+            self.assertEqual((target / "risk_catalog.json").read_text(encoding="utf-8"), "risks")
+            self.assertFalse((target / "settings.json").exists())
+
+    def test_frozen_resources_repair_missing_without_overwriting_existing_files(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            bundled, target = root / "bundle", root / "data"
+            bundled.mkdir()
+            target.mkdir()
+            (bundled / "sources.json").write_text("new-sources", encoding="utf-8")
+            (bundled / "risk_catalog.json").write_text("new-risks", encoding="utf-8")
+            (target / "sources.json").write_text("user-sources", encoding="utf-8")
+            (target / "settings.json").write_text("user-settings", encoding="utf-8")
+
+            storage._initialize_bundled_data(target, bundled)
+
+            self.assertEqual((target / "sources.json").read_text(encoding="utf-8"), "user-sources")
+            self.assertEqual((target / "risk_catalog.json").read_text(encoding="utf-8"), "new-risks")
+            self.assertEqual((target / "settings.json").read_text(encoding="utf-8"), "user-settings")
+
+    def test_frozen_resources_repair_missing_sources_without_replacing_catalog(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            bundled, target = root / "bundle", root / "data"
+            bundled.mkdir()
+            target.mkdir()
+            (bundled / "sources.json").write_text("new-sources", encoding="utf-8")
+            (bundled / "risk_catalog.json").write_text("new-risks", encoding="utf-8")
+            (target / "risk_catalog.json").write_text("user-risks", encoding="utf-8")
+
+            storage._initialize_bundled_data(target, bundled)
+
+            self.assertEqual((target / "sources.json").read_text(encoding="utf-8"), "new-sources")
+            self.assertEqual((target / "risk_catalog.json").read_text(encoding="utf-8"), "user-risks")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -36,12 +36,31 @@ APP_VERSION = "4.1.0"  # 发版时与 GitHub Releases 的 tag 同步修改
 
 TEXT_IMAGE_SIZES = ("512x512", "1024x1024", "1280x1280", "1024x768", "1920x1080", "768x1024", "1080x1920")
 
-if getattr(sys, "frozen", False) and not DATA_DIR.exists():
-    # 首次运行：把随包内置的来源清单/风险目录释放到 exe 旁边。
-    # 刻意不含 settings.json——API Key 必须由使用者自己填写。
+def _initialize_bundled_data(data_dir: Path, bundled: Path) -> None:
+    """仅释放缺失的内置清单；保留用户配置和已有清单。"""
+    data_dir.mkdir(parents=True, exist_ok=True)
+    for name in ("sources.json", "risk_catalog.json"):
+        source, destination = bundled / name, data_dir / name
+        if destination.exists():
+            continue
+        with source.open("rb") as src:
+            try:
+                dst = destination.open("xb")
+            except FileExistsError:
+                continue  # 另一个实例已创建该文件，不能覆盖。
+            try:
+                with dst:
+                    shutil.copyfileobj(src, dst)
+            except BaseException:
+                destination.unlink(missing_ok=True)
+                raise
+
+
+if getattr(sys, "frozen", False):
+    # 即使 data 已存在也补齐缺失清单；从不释放 settings.json。
     bundled = Path(getattr(sys, "_MEIPASS", "")) / "data"
-    if bundled.exists():
-        shutil.copytree(bundled, DATA_DIR)
+    if bundled.is_dir():
+        _initialize_bundled_data(DATA_DIR, bundled)
 
 SOURCE_DEFAULTS = {
     "method": "html",

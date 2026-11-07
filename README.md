@@ -89,6 +89,10 @@ OWASP 模型输出会经过六字段、风险归属、语言、跨会话镜像�
 
 本分支源码为 v4.1.0；下方 v3.0.1 链接是此前发布的版本，不包含新的 Agentic 页和文字图片功能。v4.1 可从源码运行或用 `build_exe.bat` 在本地打包，未发布新 Release。v3.0.1 修复了 v3.0.0 EXE 在 TC260 爬取时缺少指纹数据文件的问题。
 
+v4.1.0 可下载仓库中的 `dist/GenerateTestQuestion.exe`，放入独立、可写的文件夹（如桌面上的新文件夹）后运行，无需安装 Python。首次运行会在 EXE 同级创建 `data/`，保存来源清单、风险目录和后续设置；未设置输出路径时，题库写入 `data/output/`。首次使用需由使用者自行配置模型接口。程序已随包提供 Noto Sans SC 字体；字体许可及版权声明见 `assets/fonts/OFL.txt` 与 `assets/fonts/NOTICE.txt`。
+
+`data/settings.json` 包含本机填写的 API Key，请勿随 EXE 一起分发。不要从压缩包内直接运行，也不要放在没有写入权限的系统目录；如设置了输出路径，应选择目标电脑上可写的路径。
+
 不想装 Python 也可以直接用打包好的单文件程序：到
 [v3.0.1 Release](https://github.com/Juneoww/GenerateTestQuestion/releases/tag/v3.0.1)
 下载 `GenerateTestQuestion.exe`（约 60 MB），放到任意**可写**目录（如桌面、D 盘某文件夹）双击运行。

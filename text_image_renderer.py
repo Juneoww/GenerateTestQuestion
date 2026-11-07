@@ -1,7 +1,7 @@
 """功能：在纯白或本地背景上绘制完整的文字测试题并保存 PNG。
 实现：Pillow 实测字体与行宽、自动换行及缩放，校验后通过临时文件原子落盘。
 输入：题干、输出路径、画布尺寸、可选背景路径；输出：字号、字体标识、题干摘要。
-依赖：Pillow 和支持题干字符的系统字体；不调用任何模型服务。
+依赖：Pillow、随包 Noto Sans SC 字体或支持题干字符的系统字体；不调用任何模型服务。
 """
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import hashlib
 import os
 from pathlib import Path
 import re
+import sys
 import tempfile
 import warnings
 
@@ -40,12 +41,25 @@ def validate_background(path: Path) -> None:
 
 
 def _font_path() -> Path | None:
+    # PyInstaller 单文件将资源解压到 _MEIPASS；源码运行时资源位于项目目录。
+    root = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parent))
+    bundled = root / 'assets' / 'fonts' / 'NotoSansSC-VF.ttf'
+    if bundled.is_file():
+        return bundled
     fonts = Path(os.environ.get('WINDIR', r'C:\Windows')) / 'Fonts'
     for name in ('msyh.ttc', 'msyh.ttf', 'simsun.ttc', 'simhei.ttf'):
         path = fonts / name
         if path.is_file():
             return path
     return None
+
+
+def _load_font(path: Path, size: int):
+    font = ImageFont.truetype(str(path), size)
+    if path.name == 'NotoSansSC-VF.ttf':
+        # 此版本的可变字体默认是 Thin；使用 Regular 保证中文笔画清晰。
+        font.set_variation_by_name('Regular')
+    return font
 
 
 def _check_glyphs(font, text: str) -> None:
@@ -114,7 +128,7 @@ def render_text_image(question: str, image_path: Path, size: tuple[int, int], ba
     chosen = None
     for font_size in range(default, minimum - 1, -1):
         try:
-            font = ImageFont.truetype(str(path), font_size)
+            font = _load_font(path, font_size)
             _check_glyphs(font, question)
             lines = _wrap(draw, question, font, width - 2 * margin)
         except OSError as error:
