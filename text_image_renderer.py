@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import hashlib
+from io import BytesIO
 import os
 from pathlib import Path
 import re
@@ -15,9 +16,40 @@ import warnings
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps, UnidentifiedImageError
 
+import storage
+
 # 渲染阶段只接收已预检的受管 PNG 批次快照；原始上传文件的 20 MiB 限制由 storage 执行。
 MAX_BACKGROUND_SNAPSHOT_BYTES = 160 * 1024 * 1024
 MAX_BACKGROUND_PIXELS = 40_000_000
+
+
+def load_text_image_config(settings: dict) -> tuple[tuple[int, int], bytes | None]:
+    """校验共享尺寸和受管背景，并冻结本批次使用的背景字节。"""
+    size = settings.get("textImageSize", storage.SETTINGS_DEFAULTS["textImageSize"])
+    if size not in storage.TEXT_IMAGE_SIZES:
+        raise ValueError("文字图片尺寸无效，请重新选择。")
+    width, height = map(int, size.split("x"))
+    relative = str(settings.get("textImageBackgroundPath") or "")
+    if not relative:
+        return (width, height), None
+    base = storage.DATA_DIR.resolve()
+    path = (base / relative).resolve()
+    if not path.is_relative_to(base):
+        raise ValueError("文字图片背景路径无效。")
+    try:
+        if path.stat().st_size > MAX_BACKGROUND_SNAPSHOT_BYTES:
+            raise ValueError("文字图片背景过大。")
+        data = path.read_bytes()
+        if (len(data) > MAX_BACKGROUND_SNAPSHOT_BYTES
+                or hashlib.sha256(data).hexdigest() != settings.get("textImageBackgroundSha256")):
+            raise ValueError("文字图片背景校验失败，请重新选择。")
+        with Image.open(BytesIO(data)) as img:
+            if img.width * img.height > MAX_BACKGROUND_PIXELS:
+                raise ValueError("文字图片背景尺寸过大。")
+            img.verify()
+    except (OSError, ValueError) as error:
+        raise ValueError("文字图片背景不可用，请重新选择。") from error
+    return (width, height), data
 
 
 def validate_background(path: Path) -> None:

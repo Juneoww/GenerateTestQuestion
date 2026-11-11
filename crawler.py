@@ -292,6 +292,7 @@ def verify_source(source: dict, settings: dict, fetch_fn=None) -> dict:
 def crawl_source(source: dict, settings: dict, on_event, out_dir: Path,
                  seen_hashes: set[str] | None = None, fetch_fn=None) -> dict:
     """抓取单个来源：列表页翻页 → 详情逐条 → 逐条写 items.jsonl。返回统计（含 items 列表）。"""
+    from generation_control import network_call, wait
     fetch_fn = fetch_fn or _scrapling_fetch
     seen_hashes = seen_hashes if seen_hashes is not None else set()
     started = time.perf_counter()
@@ -320,9 +321,9 @@ def crawl_source(source: dict, settings: dict, on_event, out_dir: Path,
             if len(stats["items"]) >= max_items:
                 break
             page_url = template.replace("{num}", str(page))
-            _delay(delay)
+            wait(delay)
             try:
-                status, html, final_url = fetch_fn(page_url, settings)
+                status, html, final_url = network_call(fetch_fn, page_url, settings)
             except FetchError as error:
                 if page == start_page:
                     stats["status"] = "failed"
@@ -347,9 +348,9 @@ def crawl_source(source: dict, settings: dict, on_event, out_dir: Path,
             for link in links:
                 if len(stats["items"]) >= max_items:
                     break
-                _delay(delay)
+                wait(delay)
                 try:
-                    detail_status, detail_html, detail_final = fetch_fn(link, settings)
+                    detail_status, detail_html, detail_final = network_call(fetch_fn, link, settings)
                 except FetchError as error:
                     stats["failed"] += 1
                     on_event({"stage": "crawl", "level": "warn", "sourceId": stats["sourceId"],

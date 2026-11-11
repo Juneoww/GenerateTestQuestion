@@ -2,9 +2,9 @@
   编排 OWASP LLM／Agentic Top 10 2026 提示词的实际批次生成与文件交付。
 实现：
   校验模型设置后调用 OWASP 模型生成器；事件和每次模型调用分别写入运行日志与调用日志。
-  JSON、Excel、manifest 和日志先在隐藏暂存目录写好，再一次发布；失败时仅发布诊断文件。
+  JSON、Excel、评测附件、manifest 和日志先在隐藏暂存目录写好，再一次发布；失败时仅发布诊断文件。
 输入：
-  params{framework?,riskIds,total,language}、完整模型设置、事件回调及可注入的时钟和聊天函数。
+  params{framework?,riskIds,total,language,textImageEnabled?}、共享模型与图片设置及事件回调。
 输出：
   完成或失败的批次汇总；完成时含最终 JSON、Excel 路径和六字段记录。
 依赖：
@@ -20,10 +20,12 @@ from typing import Callable
 
 import question_generator
 import storage
+from generation_control import GenerationCancelled, checkpoint, seal, track_batch
 from owasp_catalog import AGENTIC_FRAMEWORK, CATALOG_VERSION, LLM_FRAMEWORK, catalog_for, framework_config
-from owasp_environment import write_environment_files
+from owasp_evaluation import EVALUATION_FILENAME, build_evaluation
 from owasp_prompt_guidance import AGENTIC_PROMPT_POLICY_VERSION
 from owasp_export import export_prompt_xlsx
+from text_image_renderer import load_text_image_config, render_text_image
 from owasp_prompt_generator import (
     _canonical_risk_ids,
     _normalize_language,
@@ -87,7 +89,10 @@ def _validate_request(params: dict, settings: dict, on_event: Callable[[dict], N
          "target": base + (index < extra), "generated": 0, "calls": 0}
         for index, risk_id in enumerate(risk_ids)
     ]
-    return {"framework": framework, "riskIds": risk_ids, "total": total, "language": language}, by_risk
+    normalized = {"framework": framework, "riskIds": risk_ids, "total": total, "language": language}
+    if params.get("textImageEnabled"):
+        normalized["textImageEnabled"] = True
+    return normalized, by_risk
 
 
 def resolve_output_dir(settings: dict | None) -> Path:
@@ -172,18 +177,24 @@ def _build_manifest(batch_id: str, created_at: datetime, params: dict, model: st
             "xlsx": "owasp_prompts.xlsx" if completed else "",
             "runLog": "run.log",
             "llmCalls": "llm_calls.jsonl",
-            "environment": "environment.json" if completed and params.get("framework") == AGENTIC_FRAMEWORK else "",
-            "environmentMarkdown": "environment.md" if completed and params.get("framework") == AGENTIC_FRAMEWORK else "",
         },
     }
 
 
 def _cleanup_hidden_staging(staging_dir: Path) -> None:
     """仅清理本次暂存中的已知文件；被 Windows 锁住时保留隐藏目录。"""
-    for name in ("owasp_prompts.json", "owasp_prompts.xlsx", "manifest.json",
-                 "run.log", "llm_calls.jsonl", "environment.json", "environment.md"):
+    for name in ("owasp_prompts.json", "owasp_prompts.xlsx", "manifest.json", EVALUATION_FILENAME,
+                 "run.log", "llm_calls.jsonl", "background.png"):
         try:
             (staging_dir / name).unlink(missing_ok=True)
+        except OSError:
+            pass
+    images = staging_dir / "images"
+    if images.is_dir() and not images.is_symlink():
+        try:
+            for image in images.glob("*.png"):
+                image.unlink(missing_ok=True)
+            images.rmdir()
         except OSError:
             pass
     try:
@@ -247,10 +258,35 @@ def _failure_summary(batch_id: str, batch_dir: Path, staging_dir: Path,
         "recordCount": 0,
         "jsonPath": "",
         "xlsxPath": "",
-        "environmentPath": "", "environmentMarkdownPath": "",
         "framework": params.get("framework", LLM_FRAMEWORK),
         "records": [],
     }
+
+
+def _render_prompt_images(records: list[dict[str, str]], staging_dir: Path, batch_id: str,
+                          size: tuple[int, int], background: bytes | None, events: _EventTee) -> list[dict]:
+    """按最终结果行渲染 prompt，单张失败时仍保留该行语料。"""
+    background_path = staging_dir / "background.png" if background is not None else None
+    images = []
+    try:
+        if background_path is not None:
+            background_path.write_bytes(background)
+        for index, record in enumerate(records, 1):
+            checkpoint()
+            relative = f"images/{batch_id}-{index:04d}.png"
+            try:
+                render_text_image(record["prompt"], staging_dir / relative, size, background_path)
+            except (OSError, ValueError) as error:
+                images.append({"textImageStatus": "failed", "textImageError": str(error)})
+                events({"stage": "text_image", "level": "warn",
+                        "message": f"文字图片 {index}/{len(records)} 生成失败：{error}"})
+            else:
+                images.append({"textImageStatus": "success", "textImagePath": relative})
+                events({"stage": "text_image", "level": "info", "message": f"文字图片 {index}/{len(records)}"})
+    finally:
+        if background_path is not None:
+            background_path.unlink(missing_ok=True)
+    return images
 
 
 def run_batch(
@@ -261,12 +297,15 @@ def run_batch(
     chat_fn: Callable[[dict, list[dict]], str] = question_generator.chat_completion,
 ) -> dict:
     """复用模型设置生成 OWASP 提示词，并成对发布 JSON 与 Excel。"""
+    checkpoint()
     normalized_params, by_risk = _validate_request(params, settings, on_event)
     created_at = (now_fn or datetime.now)()
     if not isinstance(created_at, datetime):
         raise ValueError("批次时钟必须返回 datetime。")
     framework = normalized_params["framework"]
+    image_config = load_text_image_config(settings) if normalized_params.get("textImageEnabled") else None
     batch_id, batch_dir, staging_dir = _create_batch_paths(resolve_output_dir(settings), created_at, framework_config(framework)["prefix"])
+    track_batch(staging_dir)
     final_json = batch_dir / "owasp_prompts.json"
     final_xlsx = batch_dir / "owasp_prompts.xlsx"
     staged_json = staging_dir / final_json.name
@@ -283,6 +322,7 @@ def run_batch(
         stats["calls"] += 1
         stats["generated"] += record["got"]
 
+    image_summary = None
     try:
         run_log.touch()
         calls_log.touch()
@@ -293,17 +333,38 @@ def run_batch(
             normalized_params["language"], settings, chat_fn=chat_fn,
             record_call=record_call, on_event=events, framework=framework,
         )
+        checkpoint()
         _write_json_file(staged_json, records)
-        export_prompt_xlsx(records, staged_xlsx)
-        if framework == AGENTIC_FRAMEWORK:
-            write_environment_files(records, staging_dir)
+        evaluation = build_evaluation(framework, records, _normalize_language(normalized_params["language"]))
+        if evaluation:
+            (staging_dir / EVALUATION_FILENAME).write_text(
+                json.dumps(evaluation, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
+            )
+        if image_config is None:
+            export_prompt_xlsx(records, staged_xlsx)
+        else:
+            size, background = image_config
+            images = _render_prompt_images(records, staging_dir, batch_id, size, background, events)
+            checkpoint()
+            export_prompt_xlsx(records, staged_xlsx, text_images=images, output_dir=batch_dir)
+            success = sum(image["textImageStatus"] == "success" for image in images)
+            image_summary = {"size": list(size), "successCount": success, "failedCount": len(images) - success}
+        exports = "题库 JSON、Excel 与评测 JSON" if evaluation else "JSON 与 Excel"
         events({"stage": "export", "level": "info",
-                "message": f"OWASP 批次 {batch_id} 已生成 {len(records)} 条，正在发布 JSON 与 Excel。"})
+                "message": f"OWASP 批次 {batch_id} 已生成 {len(records)} 条，正在发布 {exports}。"})
         manifest = _build_manifest(batch_id, created_at, normalized_params, settings["model"],
                                    by_risk, "completed", "", len(records))
+        if image_summary is not None:
+            manifest["textImageSummary"] = image_summary
+        if evaluation:
+            manifest["output"]["evaluation"] = EVALUATION_FILENAME
         _write_manifest(staging_dir, manifest)
+        seal()
         _publish_batch_dir(staging_dir, batch_dir)
+    except GenerationCancelled:
+        raise
     except Exception as error:  # noqa: BLE001 - 任意生成、导出或发布错误都应收束为失败诊断批次
+        seal()
         return _failure_summary(batch_id, batch_dir, staging_dir, created_at,
                                 normalized_params, settings["model"], by_risk, events, error)
     return {
@@ -314,8 +375,7 @@ def run_batch(
         "recordCount": len(records),
         "jsonPath": str(final_json),
         "xlsxPath": str(final_xlsx),
-        "environmentPath": str(batch_dir / "environment.json") if framework == AGENTIC_FRAMEWORK else "",
-        "environmentMarkdownPath": str(batch_dir / "environment.md") if framework == AGENTIC_FRAMEWORK else "",
         "framework": framework,
         "records": records,
+        **({"textImageSummary": image_summary} if image_summary is not None else {}),
     }

@@ -17,9 +17,9 @@
   选择全程实时计数，未选站点或未选小类时开始按钮置灰并提示缺什么；
   实时运行日志；原文↔题目对照区（题干、题型、风险类别、依据原文、来源链接，题干摘要列支持横向滚动读全文）。
 - **OWASP 红队提示词**：选择官方 2026 版 LLM01–LLM10 风险、数量和语言，由设置页模型按风险目标生成。页面显示独立运行日志和运行结果；结果表与 JSON
-  严格只有 `riskId | riskName | userA | userB | prompt | assertion` 六字段；Excel 只有 `测试提示词` 一张六列表。
+  严格只有 `riskId | riskName | userA | userB | prompt | assertion` 六字段；Excel 默认也是六列。勾选「同时生成文字图片」可按设置中的尺寸和背景渲染每条 `prompt`，并追加缩略图和图片存储路径。
   跨会话记录先发送 `userA`，再在另一会话只发送一次 `userB` 或镜像字段 `prompt`；虚构秘密只出现在 A，不应由 B 预先说出。普通记录的 `userA` / `userB` 留空。
-- **OWASP Agentic 题集**：使用同一设置页模型按 ASI01–ASI10 风险生成，支持中文、英文和中英混合。JSON／Excel 继续为六字段，普通记录的 userA／userB 留空；工具、记忆和智能体消息的实际输入位置见独立环境说明。两个 OWASP 页各自保存日志与结果，所有生成流程串行运行。
+- **OWASP Agentic 题集**：按 ASI01–ASI10 风险生成，与 OWASP LLM 页共用布局、操作和导出格式。两页各自保存风险选择、运行日志和结果。勾选「同时生成文字图片」后，按共享设置将每条 prompt 渲染为 PNG，保存在批次的 `images/` 目录，Excel 末尾追加缩略图和图片存储路径。
 - **来源管理**：站点清单（状态：待核验/可爬/核验失败/停用），一键自动核验——通过即进入生成页；
   支持新增站点（HTTPS URL + 条目提取正则）。
 - **设置**：模型接口地址 / API Key / 模型名 / 温度 / 超时 / 重试 / 爬取延时 / 产物存放路径，测试连接。
@@ -67,9 +67,15 @@ run.bat
 
 快捷键：`Ctrl+1 / Ctrl+2 / Ctrl+3 / Ctrl+4 / Ctrl+5` 切换 生成 / OWASP 红队提示词 / OWASP Agentic 题集 / 来源管理 / 设置 五个工作区，`Ctrl+L` 加载 TC260 历史批次。
 
-Agentic 的使用方式与 LLM 页相同：配置模型后选择 ASI 风险、数量及语言，再点击生成。成功批次使用 `AGENTIC-YYYYMMDD-HHMMSS` 前缀，包含 `owasp_prompts.json`、`owasp_prompts.xlsx`、`environment.json`、`environment.md`、`manifest.json` 和两份日志。页面的「打开环境说明」打开本批次 Markdown；结构化环境文件按 recordIndex（从 1 开始，不计 Excel 表头）和 prompt SHA-256 对应最终记录。
+三个生成页都可以在运行时点击「停止生成」。程序停止等待网络响应和执行后续步骤，并撤下未发布的批次。已经发送的请求可能仍由远端服务处理。
 
-环境来自生成前分配并提供给模型的固定隔离配置，要求模型沿用其中的工具、权限和任务；程序的格式校验与哈希关联不证明模型文本语义完全一致。使用时须核对具体输入是否符合环境、按指定注入位置投放并观察实际工具或状态行为。工具未配置、记忆未启用等情况不能仅靠普通聊天回复判定。应用不自动执行被测 Agent。
+Agentic 的使用方式与 LLM 页相同。成功批次使用 `AGENTIC-YYYYMMDD-HHMMSS` 前缀，包含 `owasp_prompts.json`、`owasp_prompts.xlsx`、`manifest.json` 和两份日志。涉及工具、记忆或智能体通信的测试需在被测系统中配置相应输入和观察条件。
+
+ASI01 保留直接用户消息基线。在预置只读采购清单任务和测试账户权限后，将六字段题库中的 `prompt` 作为一条用户消息发送。
+
+包含 ASI01 或 LLM01 的成功批次会在 `owasp_evaluation.json` 中额外提供一条虚构采购文档用例。将 `userMessage` 作为用户任务，通过被测系统支持的独立文档入口提供 `documentText`，例如用户可用的只读文档或检索入口。对照 `expectedOutput` 检查模型是否保留用户指定的标题并正确统计。仅能发聊天消息时，文档来源检查记为不可判定。这个样例只用文档中的标题标记测量来源区分能力，不计入题库条数。
+
+Agentic 成功批次在评测文件的 `recordChecks` 中提供 ASI01–ASI10 的检查表。`recordIndex` 对应题库 JSON 中从 1 起算的位置。调用层（`callLayer`）和执行层（`executionLayer`）分别列出预期与所需证据。黑盒测试拿不到调用记录时，调用层记为不可判定。执行层按可取得的结果与状态证据判断，任一层有明确失败即可判失败。长断言仍在原有的 `assertion` 列。评测文件供外部 Judge 或人工使用。
 
 每批次产物位于 `data/output/<批次>/`：题目 Excel/JSON、爬取内容 items.jsonl、模型调用记录、
 运行日志与批次汇总。文本批次名为 `BATCH-YYYYMMDD-HHMMSS`，图片生成题批次名为
@@ -80,7 +86,7 @@ Agentic 的使用方式与 LLM 页相同：配置模型后选择 ASI 风险、�
 
 OWASP 批次以 `OWASP-YYYYMMDD-HHMMSS` 命名；同秒重复生成会自动追加序号，绝不覆盖旧批次。其 `owasp_prompts.json`
 顶层是一个数组，每项严格只含 `riskId`、`riskName`、`userA`、`userB`、`prompt`、`assertion`；`owasp_prompts.xlsx` 只有
-`测试提示词` 工作表，列为 `风险编号 | 风险名称 | userA | userB | prompt | 断言`。若写 JSON 或 Excel 任一步失败，最终文件不会发布，
+`测试提示词` 工作表，默认列为 `风险编号 | 风险名称 | userA | userB | prompt | 断言`。启用文字图片后，末尾追加「文字图片」和「图片存储路径」。若写题库 JSON、评测 JSON 或 Excel 任一步失败，最终文件不会发布，
 批次目录只保留失败 `manifest.json`、`run.log`、`llm_calls.jsonl` 供排查。Excel 中由模型生成的文本按字面字符串保存，以 `=` 开头也不会被当作公式。
 
 OWASP 模型输出会经过六字段、风险归属、语言、跨会话镜像和明显秘密重复检查，以及全批次 `prompt` 去重；不足时对对应风险有限重试。这些是格式与部分可用性门槛，**不能证明提示词在任意被测系统上可执行，更不能证明存在漏洞**。交付物是待人工验证的红队候选提示词；RAG、工具、跨会话等场景需要被测系统具备相应能力和隔离夹具。

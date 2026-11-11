@@ -22,6 +22,8 @@ import urllib.request
 
 from PIL import Image, UnidentifiedImageError
 
+from generation_control import checkpoint, network_call, wait
+
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
 MAX_RESPONSE_BYTES = 30 * 1024 * 1024
 FORMATS = {'PNG': 'png', 'JPEG': 'jpg', 'WEBP': 'webp'}
@@ -45,6 +47,11 @@ def _read_limited(response, limit):
     return data
 
 
+def _request_bytes(request, timeout, limit):
+    with _open(request, timeout) as response:
+        return _read_limited(response, limit)
+
+
 def _safe_url(value):
     parsed = urllib.parse.urlsplit(value)
     if parsed.scheme not in ('http', 'https') or not parsed.hostname or parsed.username or parsed.password:
@@ -56,15 +63,14 @@ def _download(url, timeout, retries):
     req = urllib.request.Request(_safe_url(url), headers={'User-Agent': 'GenerateTestQuestion/4'})
     for attempt in range(retries + 1):
         try:
-            with _open(req, timeout) as response:
-                return _read_limited(response, MAX_IMAGE_BYTES)
+            return network_call(_request_bytes, req, timeout, MAX_IMAGE_BYTES)
         except urllib.error.HTTPError as error:
             transient = error.code == 429 or 500 <= error.code < 600
         except (urllib.error.URLError, TimeoutError, socket.timeout):
             transient = True
         if not transient or attempt == retries:
             raise ValueError('图片下载失败') from None
-        time.sleep(min(attempt + 1, 2))
+        wait(min(attempt + 1, 2))
     raise ValueError('图片下载失败')
 
 
@@ -146,12 +152,12 @@ def generate_image(prompt: str, settings: dict, batch_dir: Path, seq: int) -> di
         result['attempts'] = attempt
         try:
             request = urllib.request.Request(base + '/images/generations', data=payload, headers=headers, method='POST')
-            with _open(request, timeout) as response:
-                payload_response = json.loads(_read_limited(response, MAX_RESPONSE_BYTES).decode('utf-8'))
+            payload_response = json.loads(network_call(_request_bytes, request, timeout, MAX_RESPONSE_BYTES).decode('utf-8'))
             items = payload_response.get('data') if isinstance(payload_response, dict) else None
             if not isinstance(items, list) or not items or not isinstance(items[0], dict):
                 raise ValueError('响应中没有图片数据')
             image_data = _image_bytes(items[0], timeout, retries)
+            checkpoint()
             result['imagePath'] = _save_image(image_data, batch_dir, seq)
             result['imageStatus'] = 'success'
             result['imageError'] = ''
@@ -170,7 +176,7 @@ def generate_image(prompt: str, settings: dict, batch_dir: Path, seq: int) -> di
             if error.code == 429 or 500 <= error.code < 600:
                 result['imageError'] = f'图片服务暂时不可用（HTTP {error.code}）。'
                 if attempt <= retries:
-                    time.sleep(min(attempt, 2))
+                    wait(min(attempt, 2))
                     continue
             else:
                 # 服务端原始消息和任意文本可能包含敏感信息，仅展示有界数字业务码。
@@ -180,7 +186,7 @@ def generate_image(prompt: str, settings: dict, batch_dir: Path, seq: int) -> di
         except (urllib.error.URLError, TimeoutError, socket.timeout):
             result['imageError'] = '图片服务连接失败或超时。'
             if attempt <= retries:
-                time.sleep(min(attempt, 2))
+                wait(min(attempt, 2))
                 continue
             break
         except (ValueError, TypeError, UnicodeError, OSError, json.JSONDecodeError):

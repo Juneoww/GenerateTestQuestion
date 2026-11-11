@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import json
 import hashlib
-import io
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,6 +24,8 @@ import excel_export
 import question_generator as generator
 import reporting
 import storage
+from generation_control import GenerationCancelled, checkpoint, seal, track_batch
+from text_image_renderer import load_text_image_config
 
 DATA_DIR = storage.DATA_DIR
 OUTPUT_DIR = DATA_DIR / "output"
@@ -117,6 +118,7 @@ def _generate_images(questions, settings, batch_dir, batch_id, events, image_fn)
     save_progress()
     stop = False
     for question in questions:
+        checkpoint()
         seq = question["seq"]
         question["imageStatus"] = "in_progress"
         save_progress()
@@ -125,6 +127,8 @@ def _generate_images(questions, settings, batch_dir, batch_id, events, image_fn)
         else:
             try:
                 result = image_fn(question["question"], settings, batch_dir, seq)
+            except GenerationCancelled:
+                raise
             except Exception:
                 # 避免将意外异常中的认证信息或远程链接写入产物。
                 result = {"imageStatus": "failed", "imageError": "图像生成发生异常，请检查接口配置。"}
@@ -158,36 +162,6 @@ def _generate_images(questions, settings, batch_dir, batch_id, events, image_fn)
             "imageRejectedCount": counts["rejected"], "imageFailedCount": counts["failed"]}
 
 
-def _text_image_config(settings):
-    """在调用爬虫和模型前校验尺寸及背景，冻结一次读取的字节。"""
-    from PIL import Image
-    options = {"512x512", "1024x1024", "1280x1280", "1024x768", "1920x1080", "768x1024", "1080x1920"}
-    size = settings.get("textImageSize", "1280x1280")
-    if size not in options:
-        raise ValueError("文字图片尺寸无效，请重新选择。")
-    width, height = map(int, size.split("x"))
-    relative = str(settings.get("textImageBackgroundPath") or "")
-    if not relative:
-        return (width, height), None
-    base = storage.DATA_DIR.resolve()
-    path = (base / relative).resolve()
-    if not path.is_relative_to(base):
-        raise ValueError("文字图片背景路径无效。")
-    try:
-        if path.stat().st_size > 160 * 1024 * 1024:
-            raise ValueError("文字图片背景过大。")
-        data = path.read_bytes()
-        if len(data) > 160 * 1024 * 1024 or hashlib.sha256(data).hexdigest() != settings.get("textImageBackgroundSha256"):
-            raise ValueError("文字图片背景校验失败，请重新选择。")
-        with Image.open(io.BytesIO(data)) as img:
-            if img.width * img.height > 40_000_000:
-                raise ValueError("文字图片背景尺寸过大。")
-            img.verify()
-    except (OSError, ValueError) as error:
-        raise ValueError("文字图片背景不可用，请重新选择。") from error
-    return (width, height), data
-
-
 def _render_text_images(questions, batch_dir, size, background_path, events, render):
     """逐题渲染本地图片，保留题干、状态和可追溯的输入哈希。"""
     progress = batch_dir / "image_progress.json"
@@ -206,6 +180,7 @@ def _render_text_images(questions, batch_dir, size, background_path, events, ren
     save_progress()
     success = 0
     for question in questions:
+        checkpoint()
         seq = question["seq"]
         # 批次目录原子去重，文件名同时携带批次标识，便于跨批次汇总图片。
         rel = f"images/{batch_dir.name}-{seq:04d}.png"
@@ -229,10 +204,11 @@ def _render_text_images(questions, batch_dir, size, background_path, events, ren
 
 
 def run_batch(params: dict, settings: dict, on_event, fetch_fn=None, generate_fn=None, image_fn=None, text_render_fn=None) -> dict:
+    checkpoint()
     started = time.perf_counter()
     question_type = generator.normalize_question_type(params.get("questionType", "text"))
     text_image_enabled = question_type == "text" and bool(params.get("textImageEnabled", False))
-    text_size, background_data = _text_image_config(settings) if text_image_enabled else (None, None)
+    text_size, background_data = load_text_image_config(settings) if text_image_enabled else (None, None)
     if question_type == "image" and not all(str(settings.get(k) or "").strip() for k in ("imageBaseUrl", "imageModel")):
         raise ValueError("图片生成题需要配置文生图接口地址和模型名。")
     batch_base = f"BATCH-{datetime.now():%Y%m%d-%H%M%S}"
@@ -261,6 +237,7 @@ def run_batch(params: dict, settings: dict, on_event, fetch_fn=None, generate_fn
     while True:
         try:
             batch_dir.mkdir(exist_ok=False)
+            track_batch(batch_dir)
             break
         except FileExistsError:
             counter += 1
@@ -280,6 +257,7 @@ def run_batch(params: dict, settings: dict, on_event, fetch_fn=None, generate_fn
     crawl_stats: list[dict] = []
     pools: dict[str, list[dict]] = {"zh": [], "en": []}
     for source in selected:
+        checkpoint()
         try:
             stats = crawler.crawl_source(
                 source, settings, events, crawl_dir / source["sourceId"], seen_hashes, fetch_fn
@@ -328,6 +306,7 @@ def run_batch(params: dict, settings: dict, on_event, fetch_fn=None, generate_fn
         visited: set[str] = set()
         generated_counts[(lang, rid)] = 0
         while remaining > 0 and len(visited) < len(pool):
+            checkpoint()
             item = pool[pointer % len(pool)]
             pointer += 1
             if item["itemId"] in visited:
@@ -366,6 +345,7 @@ def run_batch(params: dict, settings: dict, on_event, fetch_fn=None, generate_fn
             break
 
     questions_path = batch_dir / "questions.json"
+    checkpoint()
     for seq, q in enumerate(questions, 1):
         q["seq"] = seq
     text_image_summary = None
@@ -380,6 +360,7 @@ def run_batch(params: dict, settings: dict, on_event, fetch_fn=None, generate_fn
             from image_generator import generate_image
             image_fn = generate_image
         image_summary = _generate_images(questions, settings, batch_dir, batch_id, events, image_fn)
+    checkpoint()
     questions_path.write_text(json.dumps({
         "formatVersion": 1,
         "batchId": batch_id,
@@ -456,6 +437,7 @@ def run_batch(params: dict, settings: dict, on_event, fetch_fn=None, generate_fn
     )
     reporting.write_crawl_report(batch_dir, crawl_stats)
 
+    seal()
     new_hashes = {h: {"batchId": batch_id} for h in seen_hashes if h not in hash_index}
     hash_index.update(new_hashes)
     _save_hash_index(hash_path, hash_index)

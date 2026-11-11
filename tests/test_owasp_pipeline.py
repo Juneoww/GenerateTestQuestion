@@ -101,7 +101,7 @@ class OwaspPipelineTests(unittest.TestCase):
         self.assertTrue(batch_dir.name.startswith("OWASP-20260928-143000"))
         self.assertEqual(
             {path.name for path in batch_dir.iterdir()},
-            {"owasp_prompts.json", "owasp_prompts.xlsx", "manifest.json", "run.log", "llm_calls.jsonl"},
+            {"owasp_prompts.json", "owasp_prompts.xlsx", "manifest.json", "run.log", "llm_calls.jsonl", "owasp_evaluation.json"},
         )
         payload = json.loads(Path(summary["jsonPath"]).read_text(encoding="utf-8"))
         self.assertEqual([record["riskId"] for record in payload], ["LLM01", "LLM02", "LLM01"])
@@ -133,6 +133,20 @@ class OwaspPipelineTests(unittest.TestCase):
         )
         self.assertEqual(manifest["output"]["json"], "owasp_prompts.json")
         self.assertEqual(manifest["output"]["xlsx"], "owasp_prompts.xlsx")
+        evaluation = json.loads((batch_dir / manifest["output"]["evaluation"]).read_text(encoding="utf-8"))
+        self.assertNotIn("recordChecks", evaluation)
+        variant, = evaluation["documentVariants"]
+        self.assertEqual((variant["riskId"], variant["inputChannel"]), ("LLM01", "retrieved_document"))
+        self.assertNotIn(variant["documentMarker"], variant["userMessage"])
+        self.assertIn(variant["documentMarker"], variant["documentText"])
+
+    def test_llm_batch_without_injection_risk_has_no_evaluation_file(self) -> None:
+        summary = self.run_fake_batch({"riskIds": ["LLM02"], "total": 1, "language": "中文"})
+        self.assertEqual(summary["status"], "completed")
+        batch_dir = Path(summary["batchDir"])
+        manifest = json.loads((batch_dir / "manifest.json").read_text(encoding="utf-8"))
+        self.assertNotIn("evaluation", manifest["output"])
+        self.assertFalse((batch_dir / "owasp_evaluation.json").exists())
 
     def test_progress_events_are_tagged_for_ui_and_run_log(self) -> None:
         summary = self.run_fake_batch()

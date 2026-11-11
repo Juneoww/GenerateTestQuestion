@@ -35,6 +35,7 @@ import question_generator
 import reporting
 import storage
 from agentic_workspace import AgenticWorkspace
+from generation_control import GenerationCancelled, GenerationControl, seal
 from prompt_widgets import configure_prompt_columns
 from owasp_catalog import AGENTIC_FRAMEWORK, AGENTIC_RISKS
 from owasp_prompt_generator import OWASP_RISKS, PROMPT_RECORD_KEYS, validate_prompt_records
@@ -54,6 +55,8 @@ class DesktopApplication(tk.Tk):
         self.minsize(1020, 720)
         self.events: queue.Queue = queue.Queue()
         self.running = False
+        self._generation = None
+        self._generation_kind = ""
         self._image_test_in_progress = False
         self.current_questions: list[dict] = []
         self.current_batch_dir = ""
@@ -137,7 +140,7 @@ class DesktopApplication(tk.Tk):
                       lambda event, page=index: self.notebook.select(page))
         self._build_generate_tab()
         self._build_owasp_tab()
-        self.agentic_page = AgenticWorkspace(self, self.agentic_tab)
+        self.agentic_page = AgenticWorkspace(self)
         self._build_sources_tab()
         self._build_settings_tab()
 
@@ -291,6 +294,9 @@ class DesktopApplication(tk.Tk):
         self.start_button = ttk.Button(options, text="开始生成", style="Accent.TButton",
                                        command=self._start_batch)
         self.start_button.grid(row=1, column=6, sticky="e", padx=(20, 0))
+        self.stop_button = ttk.Button(options, text="停止生成", state="disabled",
+                                      command=lambda: self._stop_generation("batch"))
+        self.stop_button.grid(row=1, column=7, padx=(8, 0))
         options.columnconfigure(5, weight=1)
         self.go_hint = ttk.Label(options, text="", style="Subtle.TLabel")
         self.go_hint.grid(row=2, column=0, columnspan=7, sticky=W, pady=(0, 2))
@@ -353,10 +359,15 @@ class DesktopApplication(tk.Tk):
         self._bind_page_wheel(self._page_canvas)
 
     # ------------------------------------------------------------------ OWASP 红队提示词
-    def _build_owasp_tab(self) -> None:
-        """构建独立的 OWASP 六字段结果页，不复用 TC260 的网页选择或详情面板。"""
-        page = self._make_scrollable(self.owasp_tab)
-        usage = ttk.LabelFrame(page, text="OWASP LLM Top 10 2026 红队提示词", style="Card.TLabelframe")
+    def _build_owasp_tab(self, view=None) -> None:
+        """用相同布局构建两套 OWASP 工作区，各自保存控件和结果。"""
+        view = self if view is None else view
+        agentic = view is not self
+        risks = AGENTIC_RISKS if agentic else OWASP_RISKS
+        kind = "agentic_batch" if agentic else "owasp_batch"
+        title = "OWASP Agentic Top 10 2026 题集" if agentic else "OWASP LLM Top 10 2026 红队提示词"
+        page = self._make_scrollable(self.agentic_tab if agentic else self.owasp_tab)
+        usage = ttk.LabelFrame(page, text=title, style="Card.TLabelframe")
         usage.pack(fill=X)
         ttk.Label(
             usage,
@@ -365,7 +376,7 @@ class DesktopApplication(tk.Tk):
         ).pack(anchor=W)
         ttk.Label(
             usage,
-            text="跨会话：先把 userA 发给用户 A；再把 userB 或 prompt 二选一发给用户 B（仅发送一次）。",
+            text="单条记录复制 prompt。若有跨会话字段，先发送 userA，再将 userB 或 prompt 发给用户 B 一次。",
             style="Subtle.TLabel",
         ).pack(anchor=W, pady=(4, 0))
 
@@ -374,291 +385,309 @@ class DesktopApplication(tk.Tk):
         risk_toolbar = ttk.Frame(risk_frame)
         risk_toolbar.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 5))
         ttk.Label(risk_toolbar, text="风险编号和风险名称会作为独立列随最终提示词导出。", style="Subtle.TLabel").pack(side=LEFT)
-        clear_button = ttk.Button(risk_toolbar, text="清空", width=8, command=self._clear_owasp_risks)
+        clear_button = ttk.Button(risk_toolbar, text="清空", width=8, command=lambda: self._clear_owasp_risks(view))
         clear_button.pack(side=RIGHT, padx=(6, 0))
-        all_button = ttk.Button(risk_toolbar, text="全选", width=8, command=self._select_all_owasp_risks)
+        all_button = ttk.Button(risk_toolbar, text="全选", width=8, command=lambda: self._select_all_owasp_risks(view))
         all_button.pack(side=RIGHT)
-        self._owasp_generate_widgets.extend([clear_button, all_button])
+        view._owasp_generate_widgets.extend([clear_button, all_button])
 
-        for index, risk in enumerate(OWASP_RISKS):
+        for index, risk in enumerate(risks):
             risk_id = risk["riskId"]
             variable = tk.BooleanVar(value=False)
-            self.owasp_risk_vars[risk_id] = variable
+            view.owasp_risk_vars[risk_id] = variable
             checkbutton = ttk.Checkbutton(
                 risk_frame,
                 text=f"{risk_id} · {risk['riskName']}  ({risk['englishName']})",
                 variable=variable,
-                command=self._update_owasp_selection_summary,
+                command=lambda: self._update_owasp_selection_summary(view),
             )
             checkbutton.grid(row=1 + index // 2, column=index % 2, sticky=W, padx=(0, 28), pady=3)
-            self._owasp_generate_widgets.append(checkbutton)
+            view._owasp_generate_widgets.append(checkbutton)
 
         options = ttk.LabelFrame(page, text="2. 本次生成", style="Card.TLabelframe")
         options.pack(fill=X, pady=(8, 0))
-        self.owasp_total_var = tk.StringVar(value="10")
-        self.owasp_language_var = tk.StringVar(value="中文")
+        view.owasp_total_var = tk.StringVar(value="10")
+        view.owasp_language_var = tk.StringVar(value="中文")
+        view.owasp_text_image_enabled_var = tk.BooleanVar(value=False)
         ttk.Label(options, text="生成数量").grid(row=0, column=0, sticky=W, padx=(0, 5), pady=4)
-        total_spin = ttk.Spinbox(options, from_=1, to=1000, textvariable=self.owasp_total_var, width=8)
+        total_spin = ttk.Spinbox(options, from_=1, to=1000, textvariable=view.owasp_total_var, width=8)
         total_spin.grid(row=0, column=1, sticky=W, padx=(0, 18))
         ttk.Label(options, text="输出语言").grid(row=0, column=2, sticky=W, padx=(0, 5))
         language_box = ttk.Combobox(
             options,
-            textvariable=self.owasp_language_var,
+            textvariable=view.owasp_language_var,
             values=("中文", "英文", "中英混合"),
             width=10,
             state="readonly",
         )
         language_box.grid(row=0, column=3, sticky=W, padx=(0, 18))
-        self.owasp_selection_summary = ttk.Label(options, style="Subtle.TLabel")
-        self.owasp_selection_summary.grid(row=1, column=0, columnspan=4, sticky=W, pady=(4, 0))
-        self.owasp_go_hint = ttk.Label(options, style="Subtle.TLabel")
-        self.owasp_go_hint.grid(row=2, column=0, columnspan=5, sticky=W, pady=(3, 0))
-        self.owasp_start_button = ttk.Button(
+        view.owasp_text_image_check = ttk.Checkbutton(options, text="同时生成文字图片",
+                                                      variable=view.owasp_text_image_enabled_var)
+        view.owasp_text_image_check.grid(row=0, column=4, sticky=W)
+        view.owasp_selection_summary = ttk.Label(options, style="Subtle.TLabel")
+        view.owasp_selection_summary.grid(row=1, column=0, columnspan=4, sticky=W, pady=(4, 0))
+        view.owasp_go_hint = ttk.Label(options, style="Subtle.TLabel")
+        view.owasp_go_hint.grid(row=2, column=0, columnspan=5, sticky=W, pady=(3, 0))
+        view.owasp_start_button = ttk.Button(
             options,
             text="生成可复制提示词",
             style="Accent.TButton",
-            command=self._start_owasp_batch,
+            command=lambda: self._start_owasp_batch(view),
         )
-        self.owasp_start_button.grid(row=1, column=5, rowspan=2, sticky="e", padx=(18, 0))
+        view.owasp_start_button.grid(row=1, column=5, rowspan=2, sticky="e", padx=(18, 0))
+        view.owasp_stop_button = ttk.Button(options, text="停止生成", state="disabled",
+                                            command=lambda: self._stop_generation(kind))
+        view.owasp_stop_button.grid(row=1, column=6, rowspan=2, sticky="e", padx=(8, 0))
         options.columnconfigure(4, weight=1)
-        self._owasp_generate_widgets.extend([total_spin, language_box, self.owasp_start_button])
+        view._owasp_generate_widgets.extend([total_spin, language_box, view.owasp_text_image_check, view.owasp_start_button])
 
         log_frame = ttk.LabelFrame(page, text="3. 运行日志", style="Card.TLabelframe")
         log_frame.pack(fill=X, pady=(8, 0))
-        self.owasp_log_text = tk.Text(log_frame, height=6, wrap="word", font=(FONT, 9), state="disabled")
-        owasp_log_scroll = ttk.Scrollbar(log_frame, orient=VERTICAL, command=self.owasp_log_text.yview)
-        self.owasp_log_text.configure(yscrollcommand=owasp_log_scroll.set)
-        self.owasp_log_text.pack(side=LEFT, fill="both", expand=True)
+        view.owasp_log_text = tk.Text(log_frame, height=6, wrap="word", font=(FONT, 9), state="disabled")
+        owasp_log_scroll = ttk.Scrollbar(log_frame, orient=VERTICAL, command=view.owasp_log_text.yview)
+        view.owasp_log_text.configure(yscrollcommand=owasp_log_scroll.set)
+        view.owasp_log_text.pack(side=LEFT, fill="both", expand=True)
         owasp_log_scroll.pack(side=RIGHT, fill=Y)
-        self.owasp_log_text.tag_configure("warn", foreground="#8a6d00")
-        self.owasp_log_text.tag_configure("error", foreground="#a4262c")
+        view.owasp_log_text.tag_configure("warn", foreground="#8a6d00")
+        view.owasp_log_text.tag_configure("error", foreground="#a4262c")
 
         result_frame = ttk.LabelFrame(page, text="4. 运行结果", style="Card.TLabelframe")
         result_frame.pack(fill="both", expand=True, pady=(8, 0))
-        self.owasp_empty_result_var = tk.StringVar(value="尚未生成可复制提示词。")
+        view.owasp_empty_result_var = tk.StringVar(value="尚未生成可复制提示词。")
         result_header = ttk.Frame(result_frame)
         result_header.pack(fill=X, pady=(0, 6))
-        ttk.Label(result_header, textvariable=self.owasp_empty_result_var, style="Subtle.TLabel").pack(side=LEFT)
-        self.open_owasp_xlsx_button = ttk.Button(
+        ttk.Label(result_header, textvariable=view.owasp_empty_result_var, style="Subtle.TLabel").pack(side=LEFT)
+        view.open_owasp_xlsx_button = ttk.Button(
             result_header,
             text="打开题库 Excel",
             state="disabled",
-            command=lambda: self._open_path(Path(self.owasp_xlsx)),
+            command=lambda: self._open_path(Path(view.owasp_xlsx)),
         )
-        self.open_owasp_xlsx_button.pack(side=RIGHT)
+        view.open_owasp_xlsx_button.pack(side=RIGHT)
         table_frame = ttk.Frame(result_frame)
         table_frame.pack(fill="both", expand=True)
-        self.owasp_result_tree = ttk.Treeview(table_frame, columns=PROMPT_RECORD_KEYS, show="headings", height=16)
-        configure_prompt_columns(self.owasp_result_tree)
-        self.owasp_result_tree.bind("<Double-1>", self._copy_owasp_clicked_cell)
-        tree_scroll = ttk.Scrollbar(table_frame, orient=VERTICAL, command=self.owasp_result_tree.yview)
-        x_scroll = ttk.Scrollbar(table_frame, orient=HORIZONTAL, command=self.owasp_result_tree.xview)
-        self.owasp_result_tree.configure(yscrollcommand=tree_scroll.set, xscrollcommand=x_scroll.set)
+        view.owasp_result_tree = ttk.Treeview(table_frame, columns=PROMPT_RECORD_KEYS, show="headings", height=16)
+        configure_prompt_columns(view.owasp_result_tree)
+        view.owasp_result_tree.bind("<Double-1>", lambda event: self._copy_owasp_clicked_cell(event, view))
+        tree_scroll = ttk.Scrollbar(table_frame, orient=VERTICAL, command=view.owasp_result_tree.yview)
+        x_scroll = ttk.Scrollbar(table_frame, orient=HORIZONTAL, command=view.owasp_result_tree.xview)
+        view.owasp_result_tree.configure(yscrollcommand=tree_scroll.set, xscrollcommand=x_scroll.set)
         x_scroll.pack(side=BOTTOM, fill=X)
         tree_scroll.pack(side=RIGHT, fill=Y)
-        self.owasp_result_tree.pack(side=LEFT, fill="both", expand=True)
+        view.owasp_result_tree.pack(side=LEFT, fill="both", expand=True)
 
         actions = ttk.Frame(page)
         actions.pack(fill=X, pady=(6, 0))
-        ttk.Label(actions, text="双击任意单元格即可复制；跨会话记录中的 prompt 只是 userB 的导出镜像。", style="Subtle.TLabel").pack(side=LEFT)
-        self.open_owasp_json_button = ttk.Button(
+        ttk.Label(actions, text="双击任意单元格即可复制。", style="Subtle.TLabel").pack(side=LEFT)
+        view.open_owasp_json_button = ttk.Button(
             actions,
             text="打开 JSON",
             state="disabled",
-            command=lambda: self._open_path(Path(self.owasp_json)),
+            command=lambda: self._open_path(Path(view.owasp_json)),
         )
-        self.open_owasp_json_button.pack(side=RIGHT, padx=(0, 8))
-        self.open_owasp_batch_button = ttk.Button(
+        view.open_owasp_json_button.pack(side=RIGHT, padx=(0, 8))
+        view.open_owasp_batch_button = ttk.Button(
             actions,
             text="打开批次目录",
             state="disabled",
-            command=lambda: self._open_path(Path(self.owasp_batch_dir)),
+            command=lambda: self._open_path(Path(view.owasp_batch_dir)),
         )
-        self.open_owasp_batch_button.pack(side=RIGHT, padx=(0, 8))
-        self.owasp_copy_prompt_button = ttk.Button(
+        view.open_owasp_batch_button.pack(side=RIGHT, padx=(0, 8))
+        view.owasp_copy_prompt_button = ttk.Button(
             actions,
             text="复制选中 prompt",
             state="disabled",
-            command=self._copy_selected_owasp_prompt,
+            command=lambda: self._copy_selected_owasp_prompt(view),
         )
-        self.owasp_copy_prompt_button.pack(side=RIGHT, padx=(0, 8))
+        view.owasp_copy_prompt_button.pack(side=RIGHT, padx=(0, 8))
         # 数量和语言可由键盘或下拉框直接修改，不能只依赖风险复选框的 command。
-        for variable in (self.owasp_total_var, self.owasp_language_var):
-            variable.trace_add("write", lambda *_args: self._update_owasp_selection_summary())
-        self._update_owasp_selection_summary()
-        self._bind_page_wheel(self._owasp_page_canvas, (self.owasp_log_text, self.owasp_result_tree))
+        for variable in (view.owasp_total_var, view.owasp_language_var):
+            variable.trace_add("write", lambda *_args: self._update_owasp_selection_summary(view))
+        self._update_owasp_selection_summary(view)
+        canvas = self._agentic_page_canvas if agentic else self._owasp_page_canvas
+        self._bind_page_wheel(canvas, (view.owasp_log_text, view.owasp_result_tree))
 
-    def _selected_owasp_risk_ids(self) -> list[str]:
+    def _selected_owasp_risk_ids(self, view=None) -> list[str]:
         """按目录顺序返回当前被选择的风险，保证提交到受控生成器的输入可重现。"""
-        return [risk["riskId"] for risk in OWASP_RISKS if self.owasp_risk_vars[risk["riskId"]].get()]
+        view = self if view is None else view
+        return [risk_id for risk_id, variable in view.owasp_risk_vars.items() if variable.get()]
 
-    def _select_all_owasp_risks(self) -> None:
+    def _select_all_owasp_risks(self, view=None) -> None:
         """选择所有十项 OWASP 风险，不影响 TC260 小类勾选状态。"""
-        for variable in self.owasp_risk_vars.values():
+        view = self if view is None else view
+        for variable in view.owasp_risk_vars.values():
             variable.set(True)
-        self._update_owasp_selection_summary()
+        self._update_owasp_selection_summary(view)
 
-    def _clear_owasp_risks(self) -> None:
+    def _clear_owasp_risks(self, view=None) -> None:
         """清空 OWASP 风险选择，不影响 TC260 小类勾选状态。"""
-        for variable in self.owasp_risk_vars.values():
+        view = self if view is None else view
+        for variable in view.owasp_risk_vars.values():
             variable.set(False)
-        self._update_owasp_selection_summary()
+        self._update_owasp_selection_summary(view)
 
-    def _update_owasp_selection_summary(self) -> None:
+    def _update_owasp_selection_summary(self, view=None) -> None:
         """同步 OWASP 页的独立选择状态和可开始条件。"""
-        selected = self._selected_owasp_risk_ids()
-        self.owasp_selection_summary.config(text=f"当前：{len(selected)}/10 项风险 · {self.owasp_language_var.get()}")
+        view = self if view is None else view
+        selected = self._selected_owasp_risk_ids(view)
+        view.owasp_selection_summary.config(text=f"当前：{len(selected)}/{len(view.owasp_risk_vars)} 项风险 · {view.owasp_language_var.get()}")
         if self.running:
-            self.owasp_start_button.state(["disabled"])
+            view.owasp_start_button.state(["disabled"])
             return
         try:
-            total = int(self.owasp_total_var.get())
+            total = int(view.owasp_total_var.get())
         except ValueError:
-            self.owasp_start_button.state(["disabled"])
-            self.owasp_go_hint.config(text="生成数量必须是整数。", foreground="#A4262C")
+            view.owasp_start_button.state(["disabled"])
+            view.owasp_go_hint.config(text="生成数量必须是整数。", foreground="#A4262C")
             return
         if not selected:
-            self.owasp_start_button.state(["disabled"])
-            self.owasp_go_hint.config(text="请至少选择 1 项 OWASP 风险。", foreground="#A4262C")
+            view.owasp_start_button.state(["disabled"])
+            view.owasp_go_hint.config(text="请至少选择 1 项 OWASP 风险。", foreground="#A4262C")
         elif total < len(selected) or total > 1000:
-            self.owasp_start_button.state(["disabled"])
-            self.owasp_go_hint.config(text=f"生成数量必须在 {len(selected)} 至 1000 之间。", foreground="#A4262C")
+            view.owasp_start_button.state(["disabled"])
+            view.owasp_go_hint.config(text=f"生成数量必须在 {len(selected)} 至 1000 之间。", foreground="#A4262C")
         else:
-            self.owasp_start_button.state(["!disabled"])
-            self.owasp_go_hint.config(text="就绪：使用设置页模型生成提示词；不读取网站或自动调用被测系统。", foreground="#1E7A3C")
+            view.owasp_start_button.state(["!disabled"])
+            view.owasp_go_hint.config(text="就绪：使用设置页模型生成提示词；不读取网站或自动调用被测系统。", foreground="#1E7A3C")
 
-    def _start_owasp_batch(self) -> None:
+    def _start_owasp_batch(self, view=None) -> None:
         """启动独立的 OWASP 后台批次，事件类型绝不复用 TC260 的完成处理器。"""
+        view = self if view is None else view
         if self.running:
             return
-        risk_ids = self._selected_owasp_risk_ids()
+        risk_ids = self._selected_owasp_risk_ids(view)
         if not risk_ids:
             messagebox.showwarning("未选择风险", "请至少选择一项 OWASP 风险。", parent=self)
             return
         try:
-            total = int(self.owasp_total_var.get())
+            total = int(view.owasp_total_var.get())
         except ValueError:
             messagebox.showwarning("参数错误", "生成数量必须是整数。", parent=self)
             return
         if not (len(risk_ids) <= total <= 1000):
             messagebox.showwarning("数量错误", f"生成数量必须在 {len(risk_ids)} 至 1000 之间。", parent=self)
             return
-        params = {"riskIds": risk_ids, "total": total, "language": self.owasp_language_var.get()}
+        params = {"riskIds": risk_ids, "total": total, "language": view.owasp_language_var.get()}
+        agentic = view is not self
+        if agentic:
+            params["framework"] = AGENTIC_FRAMEWORK
+        if view.owasp_text_image_enabled_var.get():
+            params["textImageEnabled"] = True
         settings = storage.load_settings()
         if any(type(settings.get(key)) is not str or not settings[key].strip() for key in ("baseUrl", "model")):
             messagebox.showwarning("缺少模型配置", "请先到“设置”页填写接口地址与模型名。", parent=self)
             return
         # 新批次确认可启动后立即撤下旧结果，避免运行期间误用上一次的产物。
-        self.owasp_records = []
-        self.owasp_batch_dir = ""
-        self.owasp_json = ""
-        self.owasp_xlsx = ""
-        self.owasp_log_text.configure(state="normal")
-        self.owasp_log_text.delete("1.0", END)
-        self.owasp_log_text.configure(state="disabled")
-        self._populate_owasp_result_tree()
-        self.open_owasp_batch_button.state(["disabled"])
-        self.open_owasp_json_button.state(["disabled"])
-        self.open_owasp_xlsx_button.state(["disabled"])
-        self.owasp_copy_prompt_button.state(["disabled"])
-        self.running = True
-        self._sync_generation_busy()
-        for widget in self._owasp_generate_widgets:
-            widget.state(["disabled"])
-        self.start_button.state(["disabled"])
-        self._set_status("正在调用设置页模型生成 OWASP 可复制提示词…")
+        view.owasp_records = []
+        view.owasp_batch_dir = ""
+        view.owasp_json = ""
+        view.owasp_xlsx = ""
+        view.owasp_log_text.configure(state="normal")
+        view.owasp_log_text.delete("1.0", END)
+        view.owasp_log_text.configure(state="disabled")
+        self._populate_owasp_result_tree(view)
+        view.open_owasp_batch_button.state(["disabled"])
+        view.open_owasp_json_button.state(["disabled"])
+        view.open_owasp_xlsx_button.state(["disabled"])
+        view.owasp_copy_prompt_button.state(["disabled"])
+        self._launch_generation("agentic_batch" if agentic else "owasp_batch",
+                                lambda *args: owasp_pipeline.run_batch(*args), params, settings,
+                                "正在调用设置页模型生成 OWASP 可复制提示词…")
 
-        def work() -> None:
-            try:
-                summary = owasp_pipeline.run_batch(params, settings, self.events.put)
-            except Exception as error:  # noqa: BLE001 - 后端错误需显示给测试人员
-                self.events.put({"stage": "_done", "kind": "owasp_batch", "ok": False, "error": str(error)})
-            else:
-                self.events.put({"stage": "_done", "kind": "owasp_batch", "ok": True, "summary": summary})
-
-        threading.Thread(target=work, daemon=True).start()
-
-    def _finish_owasp_batch(self, done: dict) -> None:
+    def _finish_owasp_batch(self, done: dict, view=None) -> None:
         """消费专属 OWASP 完成事件；无效或失败数据不会进入六列表。"""
+        view = self if view is None else view
         self.running = False
         self._sync_generation_busy()
-        for widget in self._owasp_generate_widgets:
+        for widget in view._owasp_generate_widgets:
             widget.state(["!disabled"])
         self._update_selection_summary()
-        self._update_owasp_selection_summary()
+        self._update_owasp_selection_summary(view)
         if not done.get("ok"):
-            self.owasp_records = []
-            self.owasp_batch_dir = ""
-            self.owasp_json = ""
-            self.owasp_xlsx = ""
-            self._populate_owasp_result_tree()
-            self.open_owasp_batch_button.state(["disabled"])
-            self.open_owasp_json_button.state(["disabled"])
-            self.open_owasp_xlsx_button.state(["disabled"])
-            self.owasp_copy_prompt_button.state(["disabled"])
+            view.owasp_records = []
+            view.owasp_batch_dir = ""
+            view.owasp_json = ""
+            view.owasp_xlsx = ""
+            self._populate_owasp_result_tree(view)
+            view.open_owasp_batch_button.state(["disabled"])
+            view.open_owasp_json_button.state(["disabled"])
+            view.open_owasp_xlsx_button.state(["disabled"])
+            view.owasp_copy_prompt_button.state(["disabled"])
             self._set_status("OWASP 提示词生成失败")
             self._append_log({"stage": "finish", "level": "error", "message": done.get("error", "未知错误")},
-                             self.owasp_log_text)
+                             view.owasp_log_text)
             messagebox.showerror("OWASP 生成失败", done.get("error", "未知错误"), parent=self)
             return
 
         summary = done["summary"]
-        self.owasp_batch_dir = summary.get("batchDir", "")
-        self.open_owasp_batch_button.state(["!disabled"] if self.owasp_batch_dir else ["disabled"])
+        view.owasp_batch_dir = summary.get("batchDir", "")
+        view.open_owasp_batch_button.state(["!disabled"] if view.owasp_batch_dir else ["disabled"])
         if summary.get("status") != "completed":
-            self.owasp_records = []
-            self.owasp_json = ""
-            self.owasp_xlsx = ""
-            self._populate_owasp_result_tree()
-            self.open_owasp_json_button.state(["disabled"])
-            self.open_owasp_xlsx_button.state(["disabled"])
-            self.owasp_copy_prompt_button.state(["disabled"])
+            view.owasp_records = []
+            view.owasp_json = ""
+            view.owasp_xlsx = ""
+            self._populate_owasp_result_tree(view)
+            view.open_owasp_json_button.state(["disabled"])
+            view.open_owasp_xlsx_button.state(["disabled"])
+            view.owasp_copy_prompt_button.state(["disabled"])
             self._set_status("OWASP 提示词生成失败")
             self._append_log({"stage": "finish", "level": "error", "message": summary.get("error", "未生成可用提示词。")},
-                             self.owasp_log_text)
+                             view.owasp_log_text)
             messagebox.showerror("OWASP 生成失败", summary.get("error", "未生成可用提示词。"), parent=self)
             return
 
         records = summary.get("records", [])
         errors = validate_prompt_records(records)
+        if view is not self:
+            allowed = {risk["riskId"]: risk["riskName"] for risk in AGENTIC_RISKS}
+            if summary.get("framework") != AGENTIC_FRAMEWORK:
+                errors.append("批次框架不匹配。")
+            if not errors and any(allowed.get(r["riskId"]) != r["riskName"] or r["userA"] or r["userB"] for r in records):
+                errors.append("记录不属于当前 Agentic 单提示词目录。")
         if errors:
-            self.owasp_records = []
-            self.owasp_json = ""
-            self.owasp_xlsx = ""
-            self._populate_owasp_result_tree()
-            self.open_owasp_json_button.state(["disabled"])
-            self.open_owasp_xlsx_button.state(["disabled"])
-            self.owasp_copy_prompt_button.state(["disabled"])
+            view.owasp_records = []
+            view.owasp_json = ""
+            view.owasp_xlsx = ""
+            self._populate_owasp_result_tree(view)
+            view.open_owasp_json_button.state(["disabled"])
+            view.open_owasp_xlsx_button.state(["disabled"])
+            view.owasp_copy_prompt_button.state(["disabled"])
             self._set_status("OWASP 提示词响应不符合六字段契约")
             self._append_log({"stage": "finish", "level": "error", "message": "；".join(errors)},
-                             self.owasp_log_text)
+                             view.owasp_log_text)
             messagebox.showerror("OWASP 响应被拒绝", "；".join(errors), parent=self)
             return
 
-        self.owasp_records = records
-        self.owasp_json = summary.get("jsonPath", "")
-        self.owasp_xlsx = summary.get("xlsxPath", "")
-        self._populate_owasp_result_tree()
-        self.open_owasp_json_button.state(["!disabled"] if self.owasp_json else ["disabled"])
-        self.open_owasp_xlsx_button.state(["!disabled"] if self.owasp_xlsx else ["disabled"])
-        self.owasp_copy_prompt_button.state(["!disabled"])
+        view.owasp_records = records
+        view.owasp_json = summary.get("jsonPath", "")
+        view.owasp_xlsx = summary.get("xlsxPath", "")
+        self._populate_owasp_result_tree(view)
+        view.open_owasp_json_button.state(["!disabled"] if view.owasp_json else ["disabled"])
+        view.open_owasp_xlsx_button.state(["!disabled"] if view.owasp_xlsx else ["disabled"])
+        view.owasp_copy_prompt_button.state(["!disabled"])
+        image_summary = summary.get("textImageSummary")
+        image_note = ""
+        if image_summary:
+            image_note = f"\n文字图片：成功 {image_summary['successCount']} 张，失败 {image_summary['failedCount']} 张。"
+            view.owasp_empty_result_var.set(view.owasp_empty_result_var.get() + image_note)
         self._set_status(f"OWASP 批次 {summary.get('batchId', '')} 模型生成完成：{len(records)} 条可复制提示词")
         messagebox.showinfo(
             "OWASP 生成完成",
             f"批次 {summary.get('batchId', '')}\n模型生成 {len(records)} 条可复制提示词。\n"
-            "跨会话记录请先发 userA，再只发 userB 或 prompt 一次。",
+            f"跨会话记录请先发 userA，再只发 userB 或 prompt 一次。{image_note}",
             parent=self,
         )
 
-    def _populate_owasp_result_tree(self) -> None:
+    def _populate_owasp_result_tree(self, view=None) -> None:
         """将通过校验的六字段记录放入唯一结果表，不显示富用例详情。"""
-        self.owasp_result_tree.delete(*self.owasp_result_tree.get_children())
-        if not self.owasp_records:
-            self.owasp_empty_result_var.set("尚未生成可复制提示词。")
+        view = self if view is None else view
+        view.owasp_result_tree.delete(*view.owasp_result_tree.get_children())
+        if not view.owasp_records:
+            view.owasp_empty_result_var.set("尚未生成可复制提示词。")
             return
-        for index, record in enumerate(self.owasp_records, 1):
-            self.owasp_result_tree.insert("", END, iid=str(index), values=tuple(record[key] for key in PROMPT_RECORD_KEYS))
-        self.owasp_empty_result_var.set(f"已生成 {len(self.owasp_records)} 条记录；双击任意单元格即可复制。")
+        for index, record in enumerate(view.owasp_records, 1):
+            view.owasp_result_tree.insert("", END, iid=str(index), values=tuple(record[key] for key in PROMPT_RECORD_KEYS))
+        view.owasp_empty_result_var.set(f"已生成 {len(view.owasp_records)} 条记录；双击任意单元格即可复制。")
 
     def _copy_owasp_value(self, field: str, value: str) -> None:
         """把结果表中的一个最终字段复制到剪贴板，不复制隐藏测试说明。"""
@@ -667,25 +696,27 @@ class DesktopApplication(tk.Tk):
         self.update()
         self._set_status(f"已复制 {field}。")
 
-    def _copy_owasp_clicked_cell(self, event: tk.Event[tk.Misc]) -> None:
+    def _copy_owasp_clicked_cell(self, event: tk.Event[tk.Misc], view=None) -> None:
         """双击六列表的任意单元格时复制该单元格文本。"""
-        row_id = self.owasp_result_tree.identify_row(event.y)
-        column_id = self.owasp_result_tree.identify_column(event.x)
+        view = self if view is None else view
+        row_id = view.owasp_result_tree.identify_row(event.y)
+        column_id = view.owasp_result_tree.identify_column(event.x)
         if not row_id or not column_id:
             return
         column_index = int(column_id.removeprefix("#")) - 1
         if not 0 <= column_index < len(PROMPT_RECORD_KEYS):
             return
-        values = self.owasp_result_tree.item(row_id, "values")
+        values = view.owasp_result_tree.item(row_id, "values")
         self._copy_owasp_value(PROMPT_RECORD_KEYS[column_index], values[column_index])
 
-    def _copy_selected_owasp_prompt(self) -> None:
+    def _copy_selected_owasp_prompt(self, view=None) -> None:
         """复制选中行的统一 prompt；跨会话时它与 userB 精确相同。"""
-        selected = self.owasp_result_tree.selection()
+        view = self if view is None else view
+        selected = view.owasp_result_tree.selection()
         if not selected:
             self._set_status("请先选择一条 OWASP 提示词记录。")
             return
-        values = self.owasp_result_tree.item(selected[0], "values")
+        values = view.owasp_result_tree.item(selected[0], "values")
         self._copy_owasp_value("prompt", values[PROMPT_RECORD_KEYS.index("prompt")])
 
     def _refresh_selection_catalog(self) -> None:
@@ -936,23 +967,7 @@ class DesktopApplication(tk.Tk):
                   "questionType": question_type,
                   "textImageEnabled": question_type == "text" and self.text_image_enabled_var.get()}
         storage.save_settings({"questionType": question_type})  # 记住本次的题目形式
-        self.running = True
-        self._sync_generation_busy()
-        for widget in self._generate_widgets:
-            widget.state(["disabled"])
-        for widget in self._owasp_generate_widgets:
-            widget.state(["disabled"])
-        self._set_status("生成中…")
-
-        def work() -> None:
-            try:
-                summary = pipeline.run_batch(params, settings, self.events.put)
-            except Exception as error:  # noqa: BLE001 - 后端错误原样呈现
-                self.events.put({"stage": "_done", "kind": "batch", "ok": False, "error": str(error)})
-            else:
-                self.events.put({"stage": "_done", "kind": "batch", "ok": True, "summary": summary})
-
-        threading.Thread(target=work, daemon=True).start()
+        self._launch_generation("batch", pipeline.run_batch, params, settings, "生成中…")
 
     def _finish_batch(self, done: dict) -> None:
         self.running = False
@@ -1522,13 +1537,57 @@ class DesktopApplication(tk.Tk):
         except Exception as error:  # noqa: BLE001 - 数据文件异常直接呈现
             self._set_status(f"数据加载失败：{error}")
 
+    def _launch_generation(self, kind, run, params, settings, status) -> None:
+        """三个生成页共用一个后台批次及其取消信号。"""
+        control = GenerationControl()
+        self._generation = control
+        self._generation_kind = kind
+        self.running = True
+        self._sync_generation_busy()
+        self._set_status(status)
+
+        def work():
+            try:
+                with control.activate():
+                    summary = run(params, settings, self.events.put)
+                    seal()
+            except GenerationCancelled:
+                result = {"ok": False, "cancelled": True}
+            except Exception as error:
+                result = {"ok": False, "error": str(error)}
+            else:
+                result = {"ok": True, "summary": summary}
+            self.events.put({"stage": "_done", "kind": kind, **result})
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _generation_log(self, kind):
+        return {"batch": self.log_text, "owasp_batch": self.owasp_log_text,
+                "agentic_batch": self.agentic_page.owasp_log_text}[kind]
+
+    def _stop_generation(self, kind):
+        control = self._generation
+        if not self.running or control is None or kind != self._generation_kind:
+            return
+        if control.cancel():
+            self._set_status("正在停止生成…")
+            self._append_log({"stage": "stop", "message": "已请求停止生成。"}, self._generation_log(kind))
+        else:
+            self._set_status("正在完成批次发布…")
+        self._sync_generation_busy()
+
     def _sync_generation_busy(self) -> None:
         """同步 TC260、LLM 和 Agentic 的单批次互斥状态。"""
-        for widget in (*self._generate_widgets, *self._owasp_generate_widgets):
+        for widget in (*self._generate_widgets, *self._owasp_generate_widgets, *self.agentic_page._owasp_generate_widgets):
             widget.state(["disabled"] if self.running else ["!disabled"])
         self._update_selection_summary()
         self._update_owasp_selection_summary()
-        self.agentic_page.set_busy(self.running)
+        self._update_owasp_selection_summary(self.agentic_page)
+        for kind, button in (("batch", self.stop_button), ("owasp_batch", self.owasp_stop_button),
+                             ("agentic_batch", self.agentic_page.owasp_stop_button)):
+            enabled = (self.running and kind == self._generation_kind and self._generation is not None
+                       and self._generation.can_cancel())
+            button.state(["!disabled"] if enabled else ["disabled"])
 
     def _poll_events(self) -> None:
         while True:
@@ -1539,6 +1598,15 @@ class DesktopApplication(tk.Tk):
             stage = event.get("stage", "")
             if stage == "_done":
                 kind = event.get("kind")
+                if kind in ("batch", "owasp_batch", "agentic_batch"):
+                    self._generation = None
+                    self._generation_kind = ""
+                    if event.get("cancelled"):
+                        self.running = False
+                        self._sync_generation_busy()
+                        self._set_status("已停止生成")
+                        self._append_log({"stage": "stop", "message": "已停止生成。"}, self._generation_log(kind))
+                        continue
                 if kind == "batch":
                     self._finish_batch(event)
                 elif kind == "agentic_batch":
@@ -1550,10 +1618,12 @@ class DesktopApplication(tk.Tk):
                 elif kind == "test":
                     self._finish_test(event)
                 continue
+            if self._generation is not None and self._generation.stopped.is_set():
+                continue
             if event.get("kind") == "owasp":
                 risk = f"{event['riskId']} · " if event.get("riskId") else ""
                 self._set_status(f"OWASP 进度：{risk}{event.get('message', '')}")
-                target = self.agentic_page.log_text if event.get("framework") == AGENTIC_FRAMEWORK else self.owasp_log_text
+                target = self.agentic_page.owasp_log_text if event.get("framework") == AGENTIC_FRAMEWORK else self.owasp_log_text
                 self._append_log(event, target)
             else:
                 self._append_log(event)

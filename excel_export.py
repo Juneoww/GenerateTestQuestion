@@ -25,6 +25,30 @@ COLUMNS = ["序号", "题干", "题型", "语言", "大类", "小类ID", "小类
 WIDTHS = [6, 60, 8, 8, 26, 10, 30, 24, 40, 60, 22, 20, 18]
 QUESTION_TYPE_LABELS = {"text": "文本", "image": "图片"}
 EVIDENCE_LIMIT = 500
+TEXT_IMAGE_COLUMNS = ("文字图片", "图片存储路径")
+TEXT_IMAGE_WIDTHS = (28, 65)
+
+
+def write_text_image_cells(sheet, row: int, column: int, image: dict,
+                           source_dir: Path, output_dir: Path) -> None:
+    """将本地 PNG 缩略图嵌入工作表，并填写原图发布后的绝对路径。"""
+    preview_cell = sheet.cell(row, column)
+    path_cell = sheet.cell(row, column + 1)
+    path_cell.alignment = Alignment(wrap_text=True, vertical="top")
+    if image.get("textImageStatus") != "success":
+        preview_cell.value = "生成失败：" + str(image.get("textImageError", ""))
+        return
+    relative = image["textImagePath"]
+    path_cell.value = str((output_dir / relative).resolve())
+    with PillowImage.open(source_dir / relative) as original:
+        thumb = original.convert("RGB")
+        thumb.thumbnail((180, 120))
+        buf = BytesIO()
+        thumb.save(buf, format="PNG", optimize=True)
+    buf.seek(0)
+    preview = WorkbookImage(buf)
+    sheet.add_image(preview, preview_cell.coordinate)
+    sheet.row_dimensions[row].height = max(30, preview.height * .75 + 5)
 
 
 def export_xlsx(questions: list[dict], params: dict, path: Path) -> Path:
@@ -34,9 +58,8 @@ def export_xlsx(questions: list[dict], params: dict, path: Path) -> Path:
     bold = Font(bold=True)
     image_batch = params.get("questionType") == "image" or any(q.get("questionType") == "image" for q in questions)
     text_image = bool(params.get("textImageEnabled")) and not image_batch
-    columns = COLUMNS + (["图片路径", "图片状态", "图片模型", "图片失败原因"] if image_batch else (["文字图片", "图片存储路径"] if text_image else []))
-    widths = WIDTHS + ([30, 14, 20, 45] if image_batch else ([28, 65] if text_image else []))
-    thumbnails = []
+    columns = COLUMNS + (["图片路径", "图片状态", "图片模型", "图片失败原因"] if image_batch else (list(TEXT_IMAGE_COLUMNS) if text_image else []))
+    widths = WIDTHS + ([30, 14, 20, 45] if image_batch else (list(TEXT_IMAGE_WIDTHS) if text_image else []))
     for column, name in enumerate(columns, 1):
         cell = sheet.cell(row=1, column=column, value=name)
         cell.font = bold
@@ -59,30 +82,14 @@ def export_xlsx(questions: list[dict], params: dict, path: Path) -> Path:
         ]
         if image_batch:
             values.extend([q.get("imagePath", ""), q.get("imageStatus", ""), q.get("imageModel", ""), q.get("imageError", "")])
-        elif text_image:
-            success = q.get("textImageStatus") == "success"
-            values.extend(["" if success else "生成失败：" + str(q.get("textImageError", "")),
-                           str((path.parent / q["textImagePath"]).resolve()) if success else ""])
         sheet.append(values)
-        if text_image and q.get("textImageStatus") == "success":
-            # 缩略图保存在内存直到工作簿写入，原图单独留在批次目录。
-            with PillowImage.open(path.parent / q["textImagePath"]) as original:
-                thumb = original.convert("RGB")
-                thumb.thumbnail((180, 120))
-                buf = BytesIO()
-                thumb.save(buf, format="PNG", optimize=True)
-            buf.seek(0)
-            thumbnails.append(buf)
-            preview = WorkbookImage(buf)
-            sheet.add_image(preview, f"N{index + 1}")
-            sheet.row_dimensions[index + 1].height = max(30, preview.height * .75 + 5)
+        if text_image:
+            write_text_image_cells(sheet, index + 1, len(COLUMNS) + 1, q, path.parent, path.parent)
     sheet.freeze_panes = "A2"
     wrap = Alignment(wrap_text=True, vertical="top")
     for row in sheet.iter_rows(min_row=2):
         row[1].alignment = wrap
         row[9].alignment = wrap
-        if text_image:
-            row[14].alignment = wrap
     path.parent.mkdir(parents=True, exist_ok=True)
     workbook.save(path)
     return path
