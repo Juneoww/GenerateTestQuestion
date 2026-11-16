@@ -155,7 +155,7 @@ def _build_manifest(batch_id: str, created_at: datetime, params: dict, model: st
                     by_risk: list[dict], status: str, error: str, record_count: int) -> dict:
     """把模型、配额和调用统计留在 manifest，而不污染最终六字段数组。"""
     completed = status == "completed"
-    return {
+    manifest = {
         "formatVersion": "3.0.0",
         "artifactKind": "owaspPromptSet",
         "framework": params.get("framework", LLM_FRAMEWORK),
@@ -179,6 +179,16 @@ def _build_manifest(batch_id: str, created_at: datetime, params: dict, model: st
             "llmCalls": "llm_calls.jsonl",
         },
     }
+    if params.get("framework") == AGENTIC_FRAMEWORK:
+        # 这是本批次引用的目录场景快照，并非对模型输出逐题识别出的实际输入面。
+        selected = set(params.get("riskIds", []))
+        manifest["plannedScenarios"] = {
+            "source": "catalog",
+            "byRisk": {risk["riskId"]: dict(risk["environment"])
+                       for risk in catalog_for(AGENTIC_FRAMEWORK)
+                       if risk["riskId"] in selected},
+        }
+    return manifest
 
 
 def _cleanup_hidden_staging(staging_dir: Path) -> None:

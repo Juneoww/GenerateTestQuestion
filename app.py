@@ -59,6 +59,7 @@ class DesktopApplication(tk.Tk):
         self._generation_kind = ""
         self._image_test_in_progress = False
         self.current_questions: list[dict] = []
+        self.current_is_history = False
         self.current_batch_dir = ""
         self.current_xlsx = ""
         self.owasp_records: list[dict[str, str]] = []
@@ -347,6 +348,9 @@ class DesktopApplication(tk.Tk):
         actions = ttk.Frame(page)
         actions.pack(fill=X, pady=(6, 0))
         ttk.Button(actions, text="加载历史批次", command=self._load_history_batch).pack(side=LEFT)
+        self.strategy_button = ttk.Button(actions, text="生成攻击方式变种", state="disabled",
+                                          command=lambda: self._open_strategy_window("tc"))
+        self.strategy_button.pack(side=LEFT, padx=8)
         self.open_xlsx_button = ttk.Button(actions, text="打开题库 Excel", state="disabled",
                                            command=lambda: self._open_path(Path(self.current_xlsx)))
         self.open_xlsx_button.pack(side=RIGHT)
@@ -457,6 +461,9 @@ class DesktopApplication(tk.Tk):
         result_header = ttk.Frame(result_frame)
         result_header.pack(fill=X, pady=(0, 6))
         ttk.Label(result_header, textvariable=view.owasp_empty_result_var, style="Subtle.TLabel").pack(side=LEFT)
+        view.owasp_strategy_button = ttk.Button(result_header, text="生成攻击方式变种", state="disabled",
+                                           command=lambda: self._open_strategy_window("agentic" if agentic else "llm", view))
+        view.owasp_strategy_button.pack(side=LEFT, padx=8)
         view.open_owasp_xlsx_button = ttk.Button(
             result_header,
             text="打开题库 Excel",
@@ -682,6 +689,7 @@ class DesktopApplication(tk.Tk):
         """将通过校验的六字段记录放入唯一结果表，不显示富用例详情。"""
         view = self if view is None else view
         view.owasp_result_tree.delete(*view.owasp_result_tree.get_children())
+        view.owasp_strategy_button.state(["!disabled"] if view.owasp_records else ["disabled"])
         if not view.owasp_records:
             view.owasp_empty_result_var.set("尚未生成可复制提示词。")
             return
@@ -985,6 +993,7 @@ class DesktopApplication(tk.Tk):
             return
         summary = done["summary"]
         self.current_questions = summary.get("questions", [])
+        self.current_is_history = False
         self.current_batch_dir = summary.get("batchDir", "")
         self.current_xlsx = summary.get("xlsxPath", "")
         self.open_batch_button.state(["!disabled"])
@@ -1038,6 +1047,8 @@ class DesktopApplication(tk.Tk):
 
     def _populate_question_tree(self) -> None:
         self.question_tree.delete(*self.question_tree.get_children())
+        eligible = bool(self.current_questions)
+        self.strategy_button.state(["!disabled"] if eligible else ["disabled"])
         # 空批次也必须清掉旧原文，避免把上次结果误当成本次产出。
         self.detail_text.configure(state="normal")
         self.detail_text.delete("1.0", END)
@@ -1082,6 +1093,7 @@ class DesktopApplication(tk.Tk):
                 messagebox.showerror("读取失败", f"{batch_dir / 'questions.json'}：{error}", parent=dialog)
                 return
             self.current_questions = doc.get("questions", [])
+            self.current_is_history = True
             self.current_batch_dir = str(batch_dir)
             xlsx = batch_dir / "questions.xlsx"
             self.current_xlsx = str(xlsx) if xlsx.exists() else ""
@@ -1130,6 +1142,33 @@ class DesktopApplication(tk.Tk):
             f"【依据原文】\n{question['evidenceText'][:2000]}"
         ))
         self.detail_text.configure(state="disabled")
+
+    def _open_strategy_window(self, framework: str, view=None) -> None:
+        """基于已载入的批次打开变种窗口，保留各工作区原题。"""
+        if self.running:
+            messagebox.showinfo("请稍候", "请先等待当前生成任务结束。", parent=self)
+            return
+        if framework == "tc":
+            records, batch_dir = self.current_questions, self.current_batch_dir
+        else:
+            view = self if view is None else view
+            records, batch_dir = view.owasp_records, view.owasp_batch_dir
+        if not records or not batch_dir or not Path(batch_dir).is_dir():
+            messagebox.showinfo("没有当前批次", "请先生成原题后再生成变种。", parent=self)
+            return
+        # 相同批次复用已有窗口；不同批次保留各自运行现场。
+        windows = getattr(self, "_strategy_windows", None)
+        if windows is None:
+            windows = self._strategy_windows = {}
+        key = (framework, str(Path(batch_dir).resolve()))
+        existing = windows.get(key)
+        if existing is not None and existing.winfo_exists():
+            existing.deiconify()
+            existing.lift()
+            existing.focus_force()
+            return
+        from strategy_ui import StrategyWindow
+        windows[key] = StrategyWindow(self, records, framework, batch_dir)
 
     def _open_question_url(self) -> None:
         selection = self.question_tree.selection()

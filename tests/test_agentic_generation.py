@@ -46,6 +46,9 @@ class AgenticGenerationTests(unittest.TestCase):
             for language in ("中文", "英文", "中英混合"):
                 messages = generator.build_owasp_messages(risk, language, 1, [])
                 self.assertIn(risk["testObjective"], messages[0]["content"])
+                self.assertIn("prompt 是投放至指定输入面的完整载荷", messages[0]["content"])
+                self.assertNotIn("prompt 是唯一可直接发送的完整输入", messages[0]["content"])
+                self.assertNotIn("每条输入必须自然、完整且可直接发送给被测模型", messages[0]["content"])
                 for key in ("prerequisites", "injectionSurface", "setup", "followUp", "evidence"):
                     self.assertIn(risk["environment"][key], messages[0]["content"])
                 self.assertIn("不得", messages[0]["content"])

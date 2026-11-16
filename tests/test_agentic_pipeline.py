@@ -65,6 +65,12 @@ class AgenticPipelineTests(unittest.TestCase):
         self.assertEqual(manifest["framework"], "agentic-2026")
         self.assertEqual(manifest["catalogVersion"], "2026")
         self.assertEqual(manifest["formatVersion"], "3.0.0")
+        scenarios = manifest["plannedScenarios"]
+        self.assertEqual(scenarios["source"], "catalog")
+        self.assertEqual(set(scenarios["byRisk"]), {"ASI01", "ASI06"})
+        for risk in owasp_catalog.AGENTIC_RISKS:
+            if risk["riskId"] in {"ASI01", "ASI06"}:
+                self.assertEqual(scenarios["byRisk"][risk["riskId"]], risk["environment"])
         evaluation_path = directory / manifest["output"]["evaluation"]
         evaluation = json.loads(evaluation_path.read_text(encoding="utf-8"))
         self.assertEqual(evaluation["framework"], "agentic-2026")

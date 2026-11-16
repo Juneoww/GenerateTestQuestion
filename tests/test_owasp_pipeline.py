@@ -123,6 +123,7 @@ class OwaspPipelineTests(unittest.TestCase):
         self.assertTrue(any(event["stage"] == "export" for event in logged_events))
         manifest = json.loads((batch_dir / "manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["model"], "test-model")
+        self.assertNotIn("plannedScenarios", manifest)
         self.assertEqual(manifest["status"], "completed")
         self.assertEqual(manifest["recordCount"], 3)
         self.assertEqual(manifest["generate"]["calls"], 2)

@@ -94,9 +94,11 @@ class BatchResultUiTests(unittest.TestCase):
     def test_image_question_details_show_result_path(self):
         self.question.update(questionType="image", imageStatus="success", imagePath="images/0001.png")
         self.window.current_questions = [self.question]
+        self.window.current_is_history = False
         self.window._populate_question_tree()
         self.window._on_question_selected()
         self.assertIn("images/0001.png", self.window.detail_text.get("1.0", "end-1c"))
+        self.assertFalse(self.window.strategy_button.instate(["disabled"]))
 
     def test_excel_export_error_warns_for_text_and_image_batches(self):
         for image_summary in (None, {"status": "completed", "successCount": 1, "failedCount": 0}):

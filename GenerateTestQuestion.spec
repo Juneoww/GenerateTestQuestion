@@ -32,7 +32,8 @@ version_info = VSVersionInfo(
 
 datas = [('data/sources.json', 'data'), ('data/risk_catalog.json', 'data'),
          ('assets/fonts/NotoSansSC-VF.ttf', 'assets/fonts'),
-         ('assets/fonts/OFL.txt', 'assets/fonts'), ('assets/fonts/NOTICE.txt', 'assets/fonts')]
+         ('assets/fonts/OFL.txt', 'assets/fonts'), ('assets/fonts/NOTICE.txt', 'assets/fonts'),
+         ('THIRD_PARTY_NOTICES.md', '.')]
 # BrowserForge 在首次生成请求头时会从此依赖包读取网络定义和辅助数据。
 datas += collect_data_files('apify_fingerprint_datapoints')
 binaries = []
