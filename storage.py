@@ -32,7 +32,7 @@ def _app_root() -> Path:
 
 PROJECT_ROOT = _app_root()
 DATA_DIR = PROJECT_ROOT / "data"
-APP_VERSION = "4.2.0"  # 发版时与 GitHub Releases 的 tag 同步修改
+APP_VERSION = "4.3.0"  # 发版时与 GitHub Releases 的 tag 同步修改
 
 TEXT_IMAGE_SIZES = ("512x512", "1024x1024", "1280x1280", "1024x768", "1920x1080", "768x1024", "1080x1920")
 

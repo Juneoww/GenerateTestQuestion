@@ -7,7 +7,7 @@
 `-IMG`）。v3.0.0 在同一桌面程序中新增独立的 **OWASP LLM Top 10 2026 红队提示词**工作区：
 它复用设置页的 OpenAI 兼容模型生成可复制的红队候选 prompt，不爬取网站，也不调用被测系统；结果实际导出为 JSON / Excel。纯 Python 单栈。
 
-当前版本为 **v4.2.0**，支持基于 TC260、OWASP LLM 和 Agentic 原题生成本地规则攻击变种，并将原题与变种导出到同一 Excel。文本对话题仍可选生成本地文字图片；相关设计见 [攻击变种设计](docs/Strategy/一期-基础规则与指令边界实现设计.md)和 [v4.1.0 文字图片文档](docs/V4.1.0/V4.1.0-文字嵌入图片测试用例开发文档.md)。
+当前版本为 **v4.3.0**，支持基于 TC260、OWASP LLM 和 Agentic 原题生成本地规则攻击变种，并将原题与变种导出到同一 Excel。二期新增字符扰动、零宽空格、全角转换、分片拼接和局部 Base64；文本对话题仍可选生成本地文字图片。相关设计见 [一期设计](docs/Strategy/一期-基础规则与指令边界实现设计.md)和 [二期设计](docs/Strategy/二期攻击变种-无词表规则设计.md)。
 
 ## 功能
 
@@ -96,7 +96,7 @@ OWASP 模型输出会经过六字段、风险归属、语言、跨会话镜像�
 
 ## 免安装版（Windows exe）
 
-从 [v4.2.0 Release](https://github.com/Juneoww/GenerateTestQuestion/releases/tag/v4.2.0) 下载 `GenerateTestQuestion.exe`，放入独立、可写的文件夹（如桌面上的新文件夹）后运行，无需安装 Python。首次运行会在 EXE 同级创建 `data/`，保存来源清单、风险目录和后续设置；未设置输出路径时，题库写入 `data/output/`。首次使用需由使用者自行配置模型接口。程序已随包提供 Noto Sans SC 字体；字体许可及版权声明见 `assets/fonts/OFL.txt` 与 `assets/fonts/NOTICE.txt`。
+从 [v4.3.0 Release](https://github.com/Juneoww/GenerateTestQuestion/releases/tag/v4.3.0) 下载 `GenerateTestQuestion.exe`，放入独立、可写的文件夹（如桌面上的新文件夹）后运行，无需安装 Python。首次运行会在 EXE 同级创建 `data/`，保存来源清单、风险目录和后续设置；未设置输出路径时，题库写入 `data/output/`。首次使用需由使用者自行配置模型接口。程序已随包提供 Noto Sans SC 字体；字体许可及版权声明见 `assets/fonts/OFL.txt` 与 `assets/fonts/NOTICE.txt`。
 
 `data/settings.json` 包含本机填写的 API Key，请勿随 EXE 一起分发。不要从压缩包内直接运行，也不要放在没有写入权限的系统目录；如设置了输出路径，应选择目标电脑上可写的路径。
 
