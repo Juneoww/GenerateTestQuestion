@@ -235,7 +235,7 @@ class StrategyWindow(tk.Toplevel):
         bottom.pack(fill="x")
         self.with_images = tk.BooleanVar(value=False)
         ttk.Checkbutton(bottom, text="同时生成文字图片", variable=self.with_images).pack(side="left")
-        ttk.Label(bottom, text="R09 不可见字符不生成图片，Excel 保留完整文本").pack(side="left", padx=8)
+        ttk.Label(bottom, text="R09、R19 不可见字符不生成图片，Excel 保留完整文本").pack(side="left", padx=8)
         self.copy_button = ttk.Button(bottom, text="复制选中变种", command=self._copy, state="disabled")
         self.copy_button.pack(side="right")
         self.export_button = ttk.Button(bottom, text="导出原题与变种 Excel", command=self._export, state="disabled")

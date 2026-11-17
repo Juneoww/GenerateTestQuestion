@@ -31,7 +31,10 @@ _COLUMNS = (
     ('复核状态', 'reviewStatus', 14),
 )
 _ILLEGAL_XML = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]')
-_IMAGE_REASON = '此策略无法通过文字图片保留隐藏内容'
+_IMAGE_REASONS = {
+    'R09': '表情后的不可见编码无法通过文字图片保留，仅绘制表情会丢失隐藏内容',
+    'R19_ZWSP': '零宽空格无法通过文字图片保留，生成图片会丢失插入的不可见字符',
+}
 _STATUS_LABELS = {'basic': '原题', 'generated': '已生成', 'skipped': '不适用', 'failed': '失败'}
 _REVIEW_LABELS = {'needs_review': '待复核', 'not_applicable': '不适用'}
 
@@ -125,9 +128,10 @@ def export_strategy_xlsx(
                     image_record['reason'] = '变种未生成'
                     stats['imagesSkipped'] += 1
                     continue
-                if record.get('strategyId', '').upper() == 'R09':
-                    sheet.cell(number, col, _IMAGE_REASON)
-                    image_record['reason'] = _IMAGE_REASON
+                image_reason = _IMAGE_REASONS.get(record.get('strategyId', '').upper())
+                if image_reason:
+                    sheet.cell(number, col, image_reason)
+                    image_record['reason'] = image_reason
                     stats['imagesSkipped'] += 1
                     continue
                 content = record.get('originalText', '') if status == 'basic' else record.get('variantText', '')

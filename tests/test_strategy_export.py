@@ -75,7 +75,7 @@ class StrategyExportTests(TestCase):
         self.assertEqual(stats['imagesSucceeded'], 1)
         self.assertEqual(stats['imageRecords'], [
             {'rowIndex': 1, 'strategyId': 'basic', 'status': 'success', 'relativePath': 'images/strategy_000001.png', 'reason': ''},
-            {'rowIndex': 2, 'strategyId': 'R09', 'status': 'skipped', 'relativePath': '', 'reason': '此策略无法通过文字图片保留隐藏内容'},
+            {'rowIndex': 2, 'strategyId': 'R09', 'status': 'skipped', 'relativePath': '', 'reason': '表情后的不可见编码无法通过文字图片保留，仅绘制表情会丢失隐藏内容'},
             {'rowIndex': 3, 'strategyId': 'R07', 'status': 'skipped', 'relativePath': '', 'reason': '变种未生成'},
         ])
 

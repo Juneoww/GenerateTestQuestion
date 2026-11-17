@@ -136,8 +136,10 @@ def render_text_image(question: str, image_path: Path, size: tuple[int, int], ba
     """输出一张包含完整题干的图片，无法完整显示时抛出异常。"""
     if not isinstance(question, str) or not question.strip():
         raise ValueError('题干为空')
-    if '\t' in question or len(question) > 5000:
-        raise ValueError('题干无法完整显示')
+    if '\t' in question:
+        raise ValueError('题干包含制表符，当前文字图片不支持制表符排版')
+    if len(question) > 5000:
+        raise ValueError(f'题干共 {len(question)} 个字符，超过文字图片 5000 字符上限，无法完整显示')
     if len(size) != 2 or any(type(x) is not int or x < 512 or x > 4096 for x in size):
         raise ValueError('图片尺寸无效')
     width, height = size
@@ -171,7 +173,7 @@ def render_text_image(question: str, image_path: Path, size: tuple[int, int], ba
             chosen = (font, font_size, lines, line_height)
             break
     if not chosen:
-        raise ValueError('文字无法在图片中完整显示')
+        raise ValueError(f'文字共 {len(question)} 个字符，在 {width}×{height} 图片中使用最低字号 {minimum} 仍无法完整显示')
     font, font_size, lines, line_height = chosen
     top = (height - len(lines) * line_height) // 2
     if background_path is not None:
