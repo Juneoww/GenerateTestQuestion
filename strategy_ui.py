@@ -219,8 +219,10 @@ class StrategyWindow(tk.Toplevel):
             panel = ttk.Frame(self, relief="solid", borderwidth=1, padding=4 if inline else 0)
             self.strategy_group_panels[group] = panel
             if inline:
-                # 模型策略只有三项，横向排在参数上方，展开时仍保留结果区的空间。
+                # 模型策略与全选工具共用三列，避免策略增多后超出窗口。
                 section = panel
+                for model_column in range(3):
+                    section.columnconfigure(model_column, weight=1, uniform="model-strategies")
             else:
                 # 规则选项较多，继续用带滚动的浮层展示。
                 canvas = tk.Canvas(panel, height=170, highlightthickness=0)
@@ -247,7 +249,7 @@ class StrategyWindow(tk.Toplevel):
                 var.trace_add("write", self._update_strategy_dropdown_label)
                 check = ttk.Checkbutton(section, text=f"{item['id']}  {item['name']}", variable=var,
                                         command=self._selection_changed)
-                row, check_column = (0, i + 1) if inline else (i // 3 + 1, i % 3)
+                row, check_column = (divmod(i + 1, 3) if inline else (i // 3 + 1, i % 3))
                 check.grid(row=row, column=check_column, sticky="w", padx=8, pady=2)
                 self.strategy_checks.append(check)
         def bind_scroll(widget, canvas):

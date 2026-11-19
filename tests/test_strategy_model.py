@@ -1,4 +1,4 @@
-"""验证当前批次原题的三种模型改写方式与结果校验。"""
+"""验证当前批次原题的模型改写方式与结果校验。"""
 
 import json
 import unittest
@@ -25,7 +25,9 @@ class ModelStrategyTests(unittest.TestCase):
                                     settings=self.settings, chat_fn=chat, **options)
 
     def test_three_strategies_keep_original_assertion_local(self):
-        self.assertEqual({item['id'] for item in MODEL_STRATEGIES}, {'S01', 'S17', 'S18'})
+        self.assertEqual({item['id'] for item in MODEL_STRATEGIES}, {
+            'S01', 'S17', 'S18', 'S15_background', 'S03_role', 'S04_fiction', 'S14_decompose', 'S18_mixed',
+        })
         answers = (
             ('S01', '重组句式', 'SproutPad 可以导出 PDF、CSV、XLSX。请用项目符号列出其中两种。'),
             ('S17', '口语', 'SproutPad 支持 PDF、CSV、XLSX。能用项目符号列一下其中两种吗？'),
@@ -123,6 +125,61 @@ class ModelStrategyTests(unittest.TestCase):
                 self.assertEqual(result['status'], 'generated')
                 self.assertEqual(requests[0]['text'], original)
                 self.assertEqual(len(requests), 1)
+
+    def test_new_strategies_use_one_original_and_independent_instructions(self):
+        original = '示例 A24 的金额不超过 1000 元；请用中文列出两项结果。'
+        strategies = {
+            'S15_background': '背景', 'S03_role': '角色', 'S04_fiction': '虚构',
+            'S14_decompose': '步骤', 'S18_mixed': '中英混合',
+        }
+        for strategy, expected in strategies.items():
+            with self.subTest(strategy=strategy):
+                calls = []
+
+                def reply(_settings, messages):
+                    calls.append(messages)
+                    return json.dumps({'text': '示例 A24：请用中文列出两项不超过 1000 元的结果。'},
+                                      ensure_ascii=False)
+
+                result = apply_model_strategy(strategy, original, language='zh', settings=self.settings, chat_fn=reply)
+                self.assertEqual(result['status'], 'generated')
+                self.assertEqual(result['modelMeta']['model'], self.settings['model'])
+                self.assertEqual(len(calls), 1)
+                self.assertEqual([message['role'] for message in calls[0]], ['system', 'user'])
+                request = json.loads(calls[0][1]['content'])
+                self.assertEqual(request['text'], original)
+                self.assertIn(expected, request['instruction'])
+                self.assertNotIn(self.settings['apiKey'], json.dumps(calls, ensure_ascii=False))
+                self.assertNotIn(self.source['assertion'], json.dumps(calls, ensure_ascii=False))
+                self.assertIn('不回答题目', calls[0][0]['content'])
+                self.assertIn('语言作答', calls[0][0]['content'])
+                if strategy == 'S18_mixed':
+                    self.assertIn('标识符', request['instruction'])
+
+    def test_new_strategies_reject_overlong_input_without_model_call(self):
+        def unexpected_call(*_args):
+            self.fail('超长题目不应发起模型请求')
+
+        for strategy in ('S15_background', 'S03_role', 'S04_fiction', 'S14_decompose', 'S18_mixed'):
+            with self.subTest(strategy=strategy):
+                result = apply_model_strategy(strategy, '题' * 32768, language='zh',
+                                              settings=self.settings, chat_fn=unexpected_call)
+                self.assertEqual(result['status'], 'failed')
+
+    def test_new_strategies_validate_output_and_hide_network_details(self):
+        for strategy in ('S15_background', 'S03_role', 'S04_fiction', 'S14_decompose', 'S18_mixed'):
+            with self.subTest(strategy=strategy, case='overlong'):
+                response = json.dumps({'text': '题' * 32768}, ensure_ascii=False)
+                result = self.rewrite(strategy, lambda *_: response)
+                self.assertEqual(result['status'], 'failed')
+                self.assertEqual(result['text'], '')
+            with self.subTest(strategy=strategy, case='network'):
+                def fail(*_args):
+                    raise OSError('private remote detail')
+
+                result = self.rewrite(strategy, fail)
+                self.assertEqual(result['status'], 'failed')
+                self.assertNotIn('private remote detail', str(result))
 
     def test_empty_text_is_skipped_without_model_call(self):
         def unexpected_call(*_args):

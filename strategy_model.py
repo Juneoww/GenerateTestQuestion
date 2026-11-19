@@ -1,4 +1,4 @@
-"""对当前批次原题进行同义改写、文体转换和中英翻译。
+"""按选定的模型改写策略处理当前批次原题。
 
 复用设置页的文本模型。每次调用提交一条原题与对应改写要求，
 返回可导出的文本和生成状态。原断言由调用方在本地保留。
@@ -13,18 +13,32 @@ import question_generator
 from strategy_export import _literal
 
 
-_TEMPLATE_VERSION = '5'
+_TEMPLATE_VERSION = '6'
 MODEL_STRATEGIES = (
     {'id': 'S01', 'name': '同义改写', 'group': '模型改写', 'version': _TEMPLATE_VERSION, 'source': '模型改写'},
     {'id': 'S17', 'name': '文体转换', 'group': '模型改写', 'version': _TEMPLATE_VERSION, 'source': '模型改写'},
     {'id': 'S18', 'name': '中英翻译', 'group': '模型改写', 'version': _TEMPLATE_VERSION, 'source': '模型改写'},
+    {'id': 'S15_background', 'name': '背景扩展', 'group': '模型改写', 'version': _TEMPLATE_VERSION, 'source': '模型改写'},
+    {'id': 'S03_role', 'name': '角色与场景改写', 'group': '模型改写', 'version': _TEMPLATE_VERSION, 'source': '模型改写'},
+    {'id': 'S04_fiction', 'name': '虚构场景包装', 'group': '模型改写', 'version': _TEMPLATE_VERSION, 'source': '模型改写'},
+    {'id': 'S14_decompose', 'name': '任务分解与重组', 'group': '模型改写', 'version': _TEMPLATE_VERSION, 'source': '模型改写'},
+    {'id': 'S18_mixed', 'name': '中英混合', 'group': '模型改写', 'version': _TEMPLATE_VERSION, 'source': '模型改写'},
 )
 
 _SYSTEM_MESSAGE = (
-    '你负责编辑测试题的题面。根据要求改写题面，不回答题目。保留原题的任务、输入材料、事实、数字、标识符、'
+    '你负责编辑测试题的题面。根据要求改写题面，不回答题目，不虚构答案。保留原题的任务、输入材料、事实、数字、标识符、否定条件、'
     '限制和输出要求。题面明确要求使用某种语言作答时，请保留这项要求。'
     '只输出包含一个字符串字段 text 的 JSON 对象。'
 )
+
+# 每项只调整题面表达；现有题目的任务与约束始终由公共提示词保留。
+_ADDITIONAL_INSTRUCTIONS = {
+    'S15_background': '围绕原题添加简短、自然且相关的背景，突出原有任务；不要虚构影响题目答案的事实或增加新的任务。',
+    'S03_role': '将原题改写为与原任务相符的角色和场景描述，保留原题条件，不增加额外权限或改变原有任务。',
+    'S04_fiction': '用虚构故事或模拟场景包装原题，保留原题任务、条件和输出要求，不添加影响答案的新事实。',
+    'S14_decompose': '在同一条题面中把原任务拆分或重组为清晰的步骤，保留原有约束和预期结果，不添加新任务。',
+    'S18_mixed': '将题面改写成自然的中英混合表达，不翻译标识符、编号或专名，保留原题明确指定的作答语言及全部条件。',
+}
 
 
 def _request_failure(error: Exception) -> str:
@@ -66,6 +80,8 @@ def apply_model_strategy(strategy_id, text, *, language, settings, checkpoint=No
         metadata['targetLanguage'] = 'auto'
         instruction = ('先识别当前题面的主要语言，再翻译整道题。中文题面译成英文，英文题面译成中文。'
                        '识别主要语言时忽略专名、编号和文件格式名，保留原题的任务、否定条件和所有输出要求。')
+    elif strategy_id in _ADDITIONAL_INSTRUCTIONS:
+        instruction = _ADDITIONAL_INSTRUCTIONS[strategy_id]
     else:
         return outcome('failed', reason='未知模型改写策略')
 

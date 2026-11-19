@@ -36,14 +36,49 @@ class ModelVariantWindowTests(unittest.TestCase):
             time.sleep(.01)
         self.assertFalse(self.window.busy)
 
+    def test_eight_model_options_fit_and_remain_selectable_at_minimum_size(self):
+        from strategy_model import MODEL_STRATEGIES
+
+        window = self.window
+        try:
+            self.root.deiconify()
+            window.geometry('900x650')
+            window.deiconify()
+            window.strategy_group_buttons['模型改写变种'].invoke()
+            self.root.update()
+            panel = window.strategy_group_panels['模型改写变种']
+            checks = [check for check in window.strategy_checks if check.master is panel]
+            self.assertEqual(len(checks), 8)
+            self.assertEqual([check.cget('text') for check in checks],
+                             [f"{item['id']}  {item['name']}" for item in MODEL_STRATEGIES])
+            self.assertTrue(all(check.winfo_ismapped() for check in checks))
+            panel_right = panel.winfo_rootx() + panel.winfo_width()
+            for check in checks:
+                self.assertLessEqual(check.winfo_rootx() + check.winfo_width(), panel_right,
+                                     check.cget('text'))
+                self.assertGreaterEqual(check.winfo_width(), check.winfo_reqwidth(), check.cget('text'))
+            self.assertTrue(window.generate_button.winfo_ismapped())
+            self.assertTrue(window.tree.winfo_ismapped())
+            self.assertTrue(window.export_button.winfo_ismapped())
+            self.assertLessEqual(window.generate_button.winfo_rooty() + window.generate_button.winfo_height(),
+                                 window.export_button.winfo_rooty())
+            window._set_group('模型改写变种', True)
+            self.assertIn('已选 8', window.strategy_group_buttons['模型改写变种'].cget('text'))
+            self.assertIn('最多 8 次模型请求', window.estimate.get())
+            window._set_group('模型改写变种', False)
+            self.assertIn('已选 0', window.strategy_group_buttons['模型改写变种'].cget('text'))
+        finally:
+            window.destroy()
+
     def test_all_groups_use_one_current_original_and_export_together(self):
         window = self.window
-        for sid in ('R01', 'R04', 'R18', 'I01', 'I02', 'I03', 'S01', 'S17', 'S18'):
+        for sid in ('R01', 'R04', 'R18', 'I01', 'I02', 'I03', 'S01', 'S17', 'S18',
+                    'S15_background', 'S03_role', 'S04_fiction', 'S14_decompose', 'S18_mixed'):
             window.selected_strategies[sid].set(True)
         window._selection_changed()
         self.assertFalse(hasattr(window, 'model_source_frame'))
-        self.assertIn('最多 9 条变种', window.estimate.get())
-        self.assertIn('最多 3 次模型请求', window.estimate.get())
+        self.assertIn('最多 14 条变种', window.estimate.get())
+        self.assertIn('最多 8 次模型请求', window.estimate.get())
 
         def model(sid, text, **kwargs):
             self.assertEqual(text, self.original)
@@ -54,8 +89,8 @@ class ModelVariantWindowTests(unittest.TestCase):
         with patch('strategy_model.apply_model_strategy', side_effect=model) as call:
             window._generate()
             self.wait_idle()
-        self.assertEqual(call.call_count, 3)
-        self.assertEqual(len(window.rows), 10)
+        self.assertEqual(call.call_count, 8)
+        self.assertEqual(len(window.rows), 15)
         self.assertEqual(sum(row['strategyId'] == 'basic' for row in window.rows), 1)
         self.assertTrue(all(row['originalText'] == self.original for row in window.rows))
         self.assertTrue(all(row['originalAssertion'] == '列出两种格式' for row in window.rows))
@@ -68,12 +103,16 @@ class ModelVariantWindowTests(unittest.TestCase):
         workbook = load_workbook(exported, read_only=True)
         try:
             rows = list(workbook.active.values)
-            self.assertEqual(len(rows), 11)
+            self.assertEqual(len(workbook.sheetnames), 1)
+            self.assertEqual(len(rows), 16)
             self.assertEqual(sum(row[4] == 'basic' for row in rows[1:]), 1)
+            self.assertEqual({row[4] for row in rows[1:]},
+                             {row['strategyId'] for row in window.rows})
+            self.assertTrue(all(row[14] == '列出两种格式' for row in rows[1:]))
         finally:
             workbook.close()
         manifest = json.loads(exported.with_name('strategy_variants.json').read_text(encoding='utf-8'))
-        self.assertEqual(len(manifest['results']), 10)
+        self.assertEqual(len(manifest['results']), 15)
         self.assertNotIn('secret', json.dumps(manifest))
 
     def test_model_cancel_keeps_previous_results(self):
